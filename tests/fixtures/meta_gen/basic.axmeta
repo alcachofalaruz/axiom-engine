@@ -1,0 +1,15 @@
+fixed dummy_fixed
+  storage i32
+  fraction_bits 8
+  rounding nearest
+  overflow saturate
+end
+
+vector DummyVector
+  scalar dummy_fixed
+  fields x y
+end
+
+component test
+    u32 test
+end

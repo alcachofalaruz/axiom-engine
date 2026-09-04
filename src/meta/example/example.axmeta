@@ -1,0 +1,38 @@
+fixed fp_16_16
+  storage i32
+  fraction_bits 16
+  rounding nearest
+  overflow saturate
+end
+
+fixed fp_32_32
+  storage i64
+  fraction_bits 32
+  rounding nearest
+  overflow saturate
+end
+
+vector Vec2
+  scalar fp_16_16
+  fields x y
+end
+
+vector Vec3
+  scalar fp_16_16
+  fields x y z
+end
+
+component Bullet
+  i32 damage
+  u32 lifetime
+end
+
+component SomethingVelocity
+  i32 Something
+end
+
+component transform
+  i32 x
+  i32 y
+  i32 z
+end
