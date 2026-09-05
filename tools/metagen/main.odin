@@ -2,6 +2,10 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:mem"
+import vmem "core:mem/virtual"
+import ast "core:odin/ast"
+import parser "core:odin/parser"
 import "core:os"
 import "core:path/filepath"
 import "core:strconv"
@@ -18,24 +22,39 @@ Meta_Fixed_Declaration :: struct {
 Meta_Vector_Declaration :: struct {
 	name:   string,
 	scalar: string,
-	fields: [dynamic]string,
+	fields: []string,
+}
+
+Meta_Access_Type :: enum {
+	R,
+	RW,
 }
 
 Meta_Property :: struct {
-	type: string,
-	name: string,
+	type:   string,
+	name:   string,
+	access: Meta_Access_Type,
 }
 
 Meta_Component_Declaration :: struct {
 	name:       string,
-	properties: [dynamic]Meta_Property,
+	properties: []Meta_Property,
+}
+
+Meta_System_Declaration :: struct {
+	name:   string,
+	inputs: [dynamic]Meta_Property,
 }
 
 Meta_Schema :: struct {
 	fixed:      [dynamic]Meta_Fixed_Declaration,
 	vectors:    [dynamic]Meta_Vector_Declaration,
 	components: [dynamic]Meta_Component_Declaration,
-	sources:    [dynamic][]byte,
+	Systems:    [dynamic]Meta_System_Declaration,
+
+	// Names and finalized field/property slices live until schema_destroy.
+	storage:    vmem.Arena,
+	names:      strings.Intern,
 }
 
 Meta_Block_Kind :: enum {
@@ -45,9 +64,39 @@ Meta_Block_Kind :: enum {
 	Component,
 }
 
-clone_name :: proc(value: string) -> string {
-	result, err := strings.clone(value, runtime.heap_allocator())
-	return result if err == nil else ""
+Meta_File_Type :: enum {
+	None,
+	AxMeta,
+	Cpp,
+	Odin,
+}
+
+schema_init :: proc(
+	schema: ^Meta_Schema,
+	allocator := context.allocator,
+) -> runtime.Allocator_Error {
+	schema.storage.default_commit_size = 4 * mem.Kilobyte
+	vmem.arena_init_growing(&schema.storage, 64 * mem.Kilobyte) or_return
+	schema.names.allocator = vmem.arena_allocator(&schema.storage)
+	schema.names.entries.allocator = allocator
+	schema.fixed.allocator = allocator
+	schema.vectors.allocator = allocator
+	schema.components.allocator = allocator
+	schema.Systems.allocator = allocator
+	return nil
+}
+
+schema_destroy :: proc(schema: ^Meta_Schema) {
+	for system in schema.Systems {
+		delete(system.inputs)
+	}
+	delete(schema.Systems)
+	delete(schema.components)
+	delete(schema.vectors)
+	delete(schema.fixed)
+	delete(schema.names.entries)
+	vmem.arena_destroy(&schema.storage)
+	schema^ = {}
 }
 
 is_primitive_type :: proc(name: string) -> bool {
@@ -58,27 +107,137 @@ is_primitive_type :: proc(name: string) -> bool {
 	return false
 }
 
-parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
-	data, err := os.read_entire_file_from_path(path, runtime.heap_allocator())
+has_attribute :: proc(decl: ^ast.Value_Decl, name: string) -> bool {
+	for attribute in decl.attributes {
+		for element in attribute.elems {
+			if identifier, ok := element.derived.(^ast.Ident); ok && identifier.name == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
+	arena: vmem.Arena
+	err := vmem.arena_init_growing(&arena)
+	ensure(err == nil, "failed to allocatee odin parser arena")
+	defer vmem.arena_destroy(&arena)
+	context.allocator = vmem.arena_allocator(&arena)
+	context.temp_allocator = context.allocator
+
+	bytes, read_error := os.read_entire_file(path, context.allocator)
+	if read_error != nil {
+		fmt.eprintln("Could not read", path, read_error)
+		return false
+	}
+
+	file := ast.File {
+		fullpath = path,
+		src      = string(bytes),
+	}
+	p := parser.default_parser()
+	parsed := parser.parse_file(&p, &file)
+	if !parsed || file.syntax_error_count != 0 || p.tok.error_count != 0 {
+		return false
+	}
+	alloc_err: runtime.Allocator_Error
+	for statement in file.decls {
+		declaration, ok := statement.derived.(^ast.Value_Decl)
+		if !ok || !has_attribute(declaration, "axiom_system") {
+			continue
+		}
+
+		if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
+			fmt.eprintln("expeccted one named system procedure", path)
+			return false
+		}
+
+		name, name_ok := declaration.names[0].derived.(^ast.Ident)
+		literal, literal_ok := declaration.values[0].derived.(^ast.Proc_Lit)
+		if !name_ok || !literal_ok || literal.body == nil || literal.type.generic {
+			fmt.eprintln("Expected a non-generic system procedure with a body", path)
+			return false
+		}
+		system_index := len(schema.Systems)
+		_, alloc_err = append(&schema.Systems, Meta_System_Declaration{name = name.name})
+		if alloc_err != nil {
+			return false
+		}
+		system := &schema.Systems[system_index]
+		fmt.println("system:", name.name)
+		for field in literal.type.params.list {
+			type_expression := field.type
+			if type_expression == nil || field.default_value != nil || field.flags != {} {
+				fmt.eprintln("explicitly typed parameters are expected", name.name)
+				return false
+			}
+
+			access := Meta_Access_Type.R
+			if pointer, ok := type_expression.derived.(^ast.Pointer_Type); ok {
+				access = Meta_Access_Type.RW
+				type_expression = pointer.elem
+			}
+			component, ok := type_expression.derived.(^ast.Ident)
+
+			if !ok {
+				fmt.eprintln("Only T or ^T is allowed for types")
+				return false
+			}
+			input_index := len(system.inputs)
+			_, alloc_err = append(
+				&system.inputs,
+				Meta_Property{type = component.name, name = name.name, access = access},
+			)
+			if alloc_err != nil {
+				return false
+			}
+			// grouped names e.g name1, name2: ^Transform
+			for parameter in field.names {
+				identifier, ok := parameter.derived.(^ast.Ident)
+				if !ok {
+					return false
+				}
+				fmt.printf("  %s: %s (%s)\n", identifier.name, component.name, access)
+			}
+		}
+
+
+	}
+
+
+	return false
+}
+
+parse_meta_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
+	data, err := os.read_entire_file_from_path(path, context.allocator)
+	defer delete(data)
 	if err != nil {
 		fmt.eprintfln("AxiomMetaGen: could not read {}: {}", path, err)
 		return false
 	}
-	append(&schema.sources, data)
-
-	lines, line_err := strings.split_lines(string(data), allocator = runtime.heap_allocator())
-	if line_err != nil {
-		fmt.eprintfln("AxiomMetaGen: could not split {}: {}", path, line_err)
-		return false
+	alloc_err: runtime.Allocator_Error
+	defer if alloc_err != nil {
+		fmt.eprintfln("AxiomMetaGen: allocation failed while parsing {}: {}", path, alloc_err)
 	}
-	defer delete(lines, runtime.heap_allocator())
+
+	// Reuse one buffer of each kind while parsing; only exact-size slices escape.
+	fields: [dynamic]string
+	properties: [dynamic]Meta_Property
+	defer delete(fields)
+	defer delete(properties)
+	storage := vmem.arena_allocator(&schema.storage)
 
 	block := Meta_Block_Kind.None
 	fixed_index := -1
 	vector_index := -1
 	component_index := -1
 
-	for original_line, line_number in lines {
+	remaining_lines := string(data)
+	line_number := -1
+	for original_line in strings.split_lines_iterator(&remaining_lines) {
+		line_number += 1
 		line := strings.trim_space(original_line)
 		if comment_index := strings.index(line, "//"); comment_index >= 0 {
 			line = strings.trim_space(line[:comment_index])
@@ -87,22 +246,11 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 			continue
 		}
 
-		words, words_err := strings.fields(line, allocator = runtime.heap_allocator())
-		if words_err != nil {
-			fmt.eprintfln(
-				"AxiomMetaGen: allocation failed in {}:{}: {}",
-				path,
-				line_number + 1,
-				words_err,
-			)
-			return false
-		}
-		defer delete(words, runtime.heap_allocator())
-		if len(words) == 0 {
-			continue
-		}
-		if words[0] == "fields" {
-			if block != .Vector || len(words) < 2 {
+		remaining_words := line
+		keyword, _ := strings.fields_iterator(&remaining_words)
+		if keyword == "fields" {
+			field, has_field := strings.fields_iterator(&remaining_words)
+			if block != .Vector || !has_field {
 				fmt.eprintfln(
 					"AxiomMetaGen: invalid fields declaration in {}:{}",
 					path,
@@ -110,11 +258,30 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			for field in words[1:] {
-				append(&schema.vectors[vector_index].fields, clone_name(field))
+			for has_field {
+				field, alloc_err = strings.intern_get(&schema.names, field)
+				if alloc_err != nil {
+					return false
+				}
+				_, alloc_err = append(&fields, field)
+				if alloc_err != nil {
+					return false
+				}
+				field, has_field = strings.fields_iterator(&remaining_words)
 			}
 			continue
 		}
+		// Other declarations need at most two words; a third detects extra input.
+		word_buffer := [3]string{keyword, "", ""}
+		word_count := 1
+		for word in strings.fields_iterator(&remaining_words) {
+			word_buffer[word_count] = word
+			word_count += 1
+			if word_count == len(word_buffer) {
+				break
+			}
+		}
+		words := word_buffer[:word_count]
 		if words[0] == "scalar" {
 			if block != .Vector || len(words) != 2 {
 				fmt.eprintfln(
@@ -124,7 +291,13 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			schema.vectors[vector_index].scalar = clone_name(words[1])
+			schema.vectors[vector_index].scalar, alloc_err = strings.intern_get(
+				&schema.names,
+				words[1],
+			)
+			if alloc_err != nil {
+				return false
+			}
 			continue
 		}
 		if words[0] == "storage" {
@@ -136,7 +309,13 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			schema.fixed[fixed_index].storage = clone_name(words[1])
+			schema.fixed[fixed_index].storage, alloc_err = strings.intern_get(
+				&schema.names,
+				words[1],
+			)
+			if alloc_err != nil {
+				return false
+			}
 			continue
 		}
 		if words[0] == "fraction_bits" {
@@ -148,8 +327,8 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			value, ok := strconv.parse_u64(words[1])
-			if !ok {
+			value, value_ok := strconv.parse_u64(words[1])
+			if !value_ok {
 				fmt.eprintfln(
 					"AxiomMetaGen: invalid fraction_bits value in {}:{}",
 					path,
@@ -169,7 +348,13 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			schema.fixed[fixed_index].rounding = clone_name(words[1])
+			schema.fixed[fixed_index].rounding, alloc_err = strings.intern_get(
+				&schema.names,
+				words[1],
+			)
+			if alloc_err != nil {
+				return false
+			}
 			continue
 		}
 		if words[0] == "overflow" {
@@ -181,13 +366,42 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			schema.fixed[fixed_index].overflow = clone_name(words[1])
+			schema.fixed[fixed_index].overflow, alloc_err = strings.intern_get(
+				&schema.names,
+				words[1],
+			)
+			if alloc_err != nil {
+				return false
+			}
 			continue
 		}
 		if words[0] == "end" {
 			if len(words) != 1 || block == .None {
 				fmt.eprintfln("AxiomMetaGen: unexpected `end` in {}:{}", path, line_number + 1)
 				return false
+			}
+			switch block {
+			case .Vector:
+				schema.vectors[vector_index].fields, alloc_err = make(
+					[]string,
+					len(fields),
+					storage,
+				)
+				if alloc_err != nil {
+					return false
+				}
+				copy(schema.vectors[vector_index].fields, fields[:])
+			case .Component:
+				schema.components[component_index].properties, alloc_err = make(
+					[]Meta_Property,
+					len(properties),
+					storage,
+				)
+				if alloc_err != nil {
+					return false
+				}
+				copy(schema.components[component_index].properties, properties[:])
+			case .None, .Fixed:
 			}
 			block = .None
 			fixed_index = -1
@@ -196,6 +410,14 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 			continue
 		}
 		if words[0] == "fixed" {
+			if block != .None {
+				fmt.eprintfln(
+					"AxiomMetaGen: expected `end` before declaration in {}:{}",
+					path,
+					line_number + 1,
+				)
+				return false
+			}
 			if len(words) != 2 {
 				fmt.eprintfln(
 					"AxiomMetaGen: expected `fixed <name>` in {}:{}",
@@ -204,12 +426,28 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			append(&schema.fixed, Meta_Fixed_Declaration{name = clone_name(words[1])})
+			name: string
+			name, alloc_err = strings.intern_get(&schema.names, words[1])
+			if alloc_err != nil {
+				return false
+			}
+			_, alloc_err = append(&schema.fixed, Meta_Fixed_Declaration{name = name})
+			if alloc_err != nil {
+				return false
+			}
 			fixed_index = len(schema.fixed) - 1
 			block = .Fixed
 			continue
 		}
 		if words[0] == "vector" {
+			if block != .None {
+				fmt.eprintfln(
+					"AxiomMetaGen: expected `end` before declaration in {}:{}",
+					path,
+					line_number + 1,
+				)
+				return false
+			}
 			if len(words) != 2 {
 				fmt.eprintfln(
 					"AxiomMetaGen: expected `vector <name>` in {}:{}",
@@ -218,12 +456,29 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			append(&schema.vectors, Meta_Vector_Declaration{name = clone_name(words[1])})
+			name: string
+			name, alloc_err = strings.intern_get(&schema.names, words[1])
+			if alloc_err != nil {
+				return false
+			}
+			_, alloc_err = append(&schema.vectors, Meta_Vector_Declaration{name = name})
+			if alloc_err != nil {
+				return false
+			}
+			clear(&fields)
 			vector_index = len(schema.vectors) - 1
 			block = .Vector
 			continue
 		}
 		if words[0] == "component" {
+			if block != .None {
+				fmt.eprintfln(
+					"AxiomMetaGen: expected `end` before declaration in {}:{}",
+					path,
+					line_number + 1,
+				)
+				return false
+			}
 			if len(words) != 2 {
 				fmt.eprintfln(
 					"AxiomMetaGen: expected `component <name>` in {}:{}",
@@ -232,7 +487,16 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				)
 				return false
 			}
-			append(&schema.components, Meta_Component_Declaration{name = clone_name(words[1])})
+			name: string
+			name, alloc_err = strings.intern_get(&schema.names, words[1])
+			if alloc_err != nil {
+				return false
+			}
+			_, alloc_err = append(&schema.components, Meta_Component_Declaration{name = name})
+			if alloc_err != nil {
+				return false
+			}
+			clear(&properties)
 			component_index = len(schema.components) - 1
 			block = .Component
 			continue
@@ -245,10 +509,19 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 			)
 			return false
 		}
-		append(
-			&schema.components[component_index].properties,
-			Meta_Property{type = clone_name(words[0]), name = clone_name(words[1])},
-		)
+		property: Meta_Property
+		property.type, alloc_err = strings.intern_get(&schema.names, words[0])
+		if alloc_err != nil {
+			return false
+		}
+		property.name, alloc_err = strings.intern_get(&schema.names, words[1])
+		if alloc_err != nil {
+			return false
+		}
+		_, alloc_err = append(&properties, property)
+		if alloc_err != nil {
+			return false
+		}
 	}
 
 	if block != .None {
@@ -260,17 +533,28 @@ parse_schema_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 
 parse_schema_target :: proc(schema: ^Meta_Schema, path: string) -> bool {
 	if !os.is_directory(path) {
-		return parse_schema_file(schema, path)
+		if strings.has_suffix(path, ".axmeta") {
+			return parse_meta_file(schema, path)
+		} else if strings.has_suffix(path, ".odin") {
+			return parse_odin_file(schema, path)
+		}
+		return false
 	}
 
 	walker := os.walker_create(path)
 	defer os.walker_destroy(&walker)
 
 	for info in os.walker_walk(&walker) {
-		if info.type == .Regular && strings.has_suffix(info.name, ".axmeta") {
-			if !parse_schema_file(schema, info.fullpath) {
-				return false
-			}
+		if info.type == .Regular {
+			if strings.has_suffix(info.name, ".axmeta") {
+				if !parse_meta_file(schema, info.fullpath) {
+					continue
+				}
+			} else if strings.has_suffix(info.name, ".odin") {
+				if !parse_odin_file(schema, info.fullpath) {
+					continue
+				}}
+
 		}
 	}
 
@@ -283,19 +567,19 @@ parse_schema_target :: proc(schema: ^Meta_Schema, path: string) -> bool {
 }
 
 odin_value_name :: proc(name: string) -> string {
-	value, err := strings.to_snake_case(name, runtime.heap_allocator())
+	value, err := strings.to_snake_case(name, context.temp_allocator)
 	return value if err == nil else ""
 }
 
 odin_type_name :: proc(name: string) -> string {
-	value, err := strings.to_ada_case(name, runtime.heap_allocator())
+	value, err := strings.to_ada_case(name, context.temp_allocator)
 	return value if err == nil else ""
 }
 
 emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaration) -> bool {
 	type_name := odin_type_name(declaration.name)
 	proc_prefix := odin_value_name(type_name)
-	upper := strings.to_upper(proc_prefix)
+	upper := strings.to_upper(proc_prefix, context.temp_allocator)
 	if len(upper) > 3 && upper[:3] == "FP_" {
 		upper = upper[3:]
 	}
@@ -551,7 +835,7 @@ emit_component :: proc(
 		fmt.sbprintfln(builder, "\t{}: {},", odin_value_name(property.name), property_type)
 	}
 	fmt.sbprintln(builder, "}")
-	upper := strings.to_upper(odin_value_name(declaration.name))
+	upper := strings.to_upper(odin_value_name(declaration.name), context.temp_allocator)
 	fmt.sbprintfln(builder, "COMPONENT_TYPE_{}_MASK_INDEX :: u32({})", upper, mask_index)
 }
 
@@ -561,7 +845,7 @@ emit_component_runtime :: proc(
 ) {
 	type_name := odin_type_name(declaration.name)
 	value_name := odin_value_name(declaration.name)
-	upper := strings.to_upper(value_name)
+	upper := strings.to_upper(value_name, context.temp_allocator)
 
 	fmt.sbprintfln(
 		builder,
@@ -1002,7 +1286,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder)
 	for index := len(schema.components) - 1; index >= 0; index -= 1 {
 		value_name := odin_value_name(schema.components[index].name)
-		upper := strings.to_upper(value_name)
+		upper := strings.to_upper(value_name, context.temp_allocator)
 		fmt.sbprintfln(&builder, "\t_, {}_append_error := append(", value_name)
 		fmt.sbprintln(&builder, "\t\t&generated_runtime.component_managers,")
 		fmt.sbprintln(&builder, "\t\tAxiom_Generated_Component_Manager_Table{")
@@ -1036,17 +1320,17 @@ generated_file_name :: proc(kind, declaration_name: string) -> string {
 		"generated_{}_{}.odin",
 		kind,
 		odin_value_name(declaration_name),
-		allocator = runtime.heap_allocator(),
+		allocator = context.allocator,
 	)
 }
 
 write_generated_file :: proc(output_directory, file_name, contents: string) -> bool {
-	path, path_err := filepath.join({output_directory, file_name}, runtime.heap_allocator())
+	path, path_err := filepath.join({output_directory, file_name}, context.allocator)
 	if path_err != nil {
 		fmt.eprintfln("AxiomMetaGen: could not build output path for {}: {}", file_name, path_err)
 		return false
 	}
-	defer delete(path, runtime.heap_allocator())
+	defer delete(path, context.allocator)
 
 	if write_err := os.write_entire_file(path, contents); write_err != nil {
 		fmt.eprintfln("AxiomMetaGen: could not write {}: {}", path, write_err)
@@ -1130,7 +1414,7 @@ file_name_is_expected :: proc(file_name: string, expected: []string) -> bool {
 }
 
 remove_stale_generated_files :: proc(output_directory: string, expected: []string) -> bool {
-	files, read_err := os.read_all_directory_by_path(output_directory, runtime.heap_allocator())
+	files, read_err := os.read_all_directory_by_path(output_directory, context.allocator)
 	if read_err != nil {
 		fmt.eprintfln(
 			"AxiomMetaGen: could not scan output directory {}: {}",
@@ -1139,7 +1423,7 @@ remove_stale_generated_files :: proc(output_directory: string, expected: []strin
 		)
 		return false
 	}
-	defer os.file_info_slice_delete(files, runtime.heap_allocator())
+	defer os.file_info_slice_delete(files, context.allocator)
 
 	for file in files {
 		if file.type != .Regular ||
@@ -1164,20 +1448,20 @@ register_generated_file :: proc(expected: ^[dynamic]string, file_name: string) -
 		fmt.eprintfln("AxiomMetaGen: declarations map to duplicate output file {}", file_name)
 		return false
 	}
-	append(expected, file_name)
+	if _, err := append(expected, file_name); err != nil {
+		fmt.eprintfln("AxiomMetaGen: could not register output {}: {}", file_name, err)
+		return false
+	}
 	return true
 }
 
 remove_legacy_generated_directory :: proc(source_directory: string) -> bool {
-	legacy_directory, path_err := filepath.join(
-		{source_directory, "generated"},
-		runtime.heap_allocator(),
-	)
+	legacy_directory, path_err := filepath.join({source_directory, "generated"}, context.allocator)
 	if path_err != nil {
 		fmt.eprintfln("AxiomMetaGen: could not build legacy generated path: {}", path_err)
 		return false
 	}
-	defer delete(legacy_directory, runtime.heap_allocator())
+	defer delete(legacy_directory, context.allocator)
 
 	if !os.is_directory(legacy_directory) {
 		return true
@@ -1186,7 +1470,7 @@ remove_legacy_generated_directory :: proc(source_directory: string) -> bool {
 		return false
 	}
 
-	files, read_err := os.read_all_directory_by_path(legacy_directory, runtime.heap_allocator())
+	files, read_err := os.read_all_directory_by_path(legacy_directory, context.allocator)
 	if read_err != nil {
 		fmt.eprintfln(
 			"AxiomMetaGen: could not inspect legacy generated directory {}: {}",
@@ -1195,7 +1479,7 @@ remove_legacy_generated_directory :: proc(source_directory: string) -> bool {
 		)
 		return false
 	}
-	defer os.file_info_slice_delete(files, runtime.heap_allocator())
+	defer os.file_info_slice_delete(files, context.allocator)
 	if len(files) != 0 {
 		return true
 	}
@@ -1211,27 +1495,56 @@ remove_legacy_generated_directory :: proc(source_directory: string) -> bool {
 }
 
 emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> bool {
+	// Builders and the expected-file list can grow on the caller's allocator.
+	// Case conversions only survive until the current output file is written.
+	scratch: vmem.Arena
+	scratch.default_commit_size = 4 * mem.Kilobyte
+	if err := vmem.arena_init_growing(&scratch, 64 * mem.Kilobyte); err != nil {
+		fmt.eprintfln("AxiomMetaGen: could not allocate emission scratch: {}", err)
+		return false
+	}
+	defer vmem.arena_destroy(&scratch)
+	context.temp_allocator = vmem.arena_allocator(&scratch)
+
 	expected: [dynamic]string
+	defer {
+		for file_name in expected {
+			delete(file_name)
+		}
+		delete(expected)
+	}
 	for declaration in schema.fixed {
+		defer vmem.arena_free_all(&scratch)
 		file_name := generated_file_name("fixed", declaration.name)
-		if !register_generated_file(&expected, file_name) ||
-		   !write_fixed_file(source_directory, file_name, declaration) {
+		if !register_generated_file(&expected, file_name) {
+			delete(file_name)
+			return false
+		}
+		if !write_fixed_file(source_directory, file_name, declaration) {
 			return false
 		}
 	}
 	for declaration in schema.vectors {
+		defer vmem.arena_free_all(&scratch)
 		file_name := generated_file_name("vector", declaration.name)
-		if !register_generated_file(&expected, file_name) ||
-		   !write_vector_file(source_directory, file_name, declaration) {
+		if !register_generated_file(&expected, file_name) {
+			delete(file_name)
+			return false
+		}
+		if !write_vector_file(source_directory, file_name, declaration) {
 			return false
 		}
 	}
 	for index := 0; index < len(schema.components); index += 1 {
+		defer vmem.arena_free_all(&scratch)
 		mask_index := u32(len(schema.components) - index)
 		declaration := schema.components[index]
 		file_name := generated_file_name("component", declaration.name)
-		if !register_generated_file(&expected, file_name) ||
-		   !write_component_file(source_directory, file_name, declaration, mask_index) {
+		if !register_generated_file(&expected, file_name) {
+			delete(file_name)
+			return false
+		}
+		if !write_component_file(source_directory, file_name, declaration, mask_index) {
 			return false
 		}
 	}
@@ -1243,130 +1556,37 @@ emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> boo
 	return true
 }
 
-import "core:fmt"
-import vmem "core:mem/virtual"
-import ast "core:odin/ast"
-import parser "core:odin/parser"
-import "core:os"
 
-
-has_attribute :: proc(decl: ^ast.Value_Decl, name: string) -> bool {
-	for attribute in decl.attributes {
-		for element in attribute.elems {
-			if identifier, ok := element.derived.(^ast.Ident); ok && identifier.name == name {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-inspect_odin_file :: proc(path: string) -> bool {
-	arena: vmem.Arena
-	err := vmem.arena_init_growing(&arena)
-	ensure(err != nil, "failed to allocatee odin parser arena")
-	defer vmem.arena_destroy(&arena)
-	context.allocator = vmem.arena_allocator(&arena)
-	context.temp_allocator = context.allocator
-
-	bytes, read_error := os.read_entire_file(path, context.allocator)
-	if read_error != nil {
-		fmt.eprintln("Could not read", path, read_error)
-		return false
-	}
-
-	file := ast.File {
-		fullpath = path,
-		src      = string(bytes),
-	}
-	p := parser.default_parser()
-	parsed := parser.parse_file(&p, &file)
-	if !parsed || file.syntax_error_count != 0 || p.tok.error_count != 0 {
-		return false
-	}
-
-	for statement in file.decls {
-		declaration, ok := statement.derived.(^ast.Value_Decl)
-		if !ok || !has_attribute(declaration, "axiom_system") {
-			continue
-		}
-
-		if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
-			fmt.eprintln("expeccted one named system procedure", path)
-			return false
-		}
-
-		name, name_ok := declaration.names[0].derived.(^ast.Ident)
-		literal, literal_ok := declaration.values[0].derived.(^ast.Proc_Lit)
-		if !name_ok || !literal_ok || literal.body == nil || literal.type.generic {
-			fmt.eprintln("Expected a non-generic system procedure with a body", path)
-			return false
-		}
-
-		fmt.println("system:", name.name)
-		for field in literal.type.params.list {
-			type_expression := field.type
-			if type_expression == nil || field.default_value != nil || field.flags != {} {
-				fmt.eprintln("explicitly typed parameters are expected", name.name)
-				return false
-			}
-
-			access := "read"
-			if pointer, ok := type_expression.derived.(^ast.Pointer_Type); ok {
-				access = "read/write"
-				type_expression = pointer.elem
-			}
-			component, ok := type_expression.derived.(^ast.Ident)
-
-			if !ok {
-				fmt.eprintln("Only T or ^T is allowed for types")
-				return false
-			}
-
-			if component.name == "Entity" {
-				access = "entity"
-			}
-
-			// grouped names e.g name1, name2: ^Transform
-			for parameter in field.names {
-				identifier, ok := parameter.derived.(^ast.Ident)
-				if !ok {
-					return false
-				}
-				fmt.printf("  %s: %s (%s)\n", identifier.name, component.name, access)
-			}
-		}
-
-
-	}
-
-
-	return false
-}
-
-main :: proc() {
-	args := os.args
+generate :: proc(args: []string) -> bool {
 	if len(args) < 3 {
 		fmt.eprintln(
 			"usage: axiom-metagen <source-directory> <schema-directory|schema.axmeta> [...]",
 		)
-		os.exit(1)
+		return false
 	}
 
 	source_directory := args[1]
 	schema: Meta_Schema
+	if err := schema_init(&schema); err != nil {
+		fmt.eprintfln("AxiomMetaGen: could not allocate schema storage: {}", err)
+		return false
+	}
+	defer schema_destroy(&schema)
 	for path in args[2:] {
 		if !parse_schema_target(&schema, path) {
-			os.exit(1)
+			return false
 		}
 	}
 
 	if !emit_schema_files(&schema, source_directory) {
 		fmt.eprintln("AxiomMetaGen: failed to write generated files under ", source_directory)
-		os.exit(1)
+		return false
 	}
-	for source in schema.sources {
-		delete(source, runtime.heap_allocator())
+	return true
+}
+
+main :: proc() {
+	if !generate(os.args) {
+		os.exit(1)
 	}
 }

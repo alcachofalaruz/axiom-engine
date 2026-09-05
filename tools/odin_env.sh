@@ -18,6 +18,5 @@ if [[ -z "$odinfmt_command" && -n "${HOME:-}" && -x "$HOME/.local/bin/odinfmt" ]
 	odinfmt_command="$HOME/.local/bin/odinfmt"
 fi
 if [[ -z "$odinfmt_command" ]]; then
-	echo "Axiom: odinfmt not found. Set ODINFMT_COMMAND to its executable path." >&2
-	exit 127
+	echo "[Axiom] odinfmt not found; skipping generated-code formatting." >&2
 fi
