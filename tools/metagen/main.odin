@@ -330,7 +330,13 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 	fmt.sbprintfln(builder, "FP_{}_MAX_RAW :: {}", upper, max_raw)
 	fmt.sbprintln(builder)
 
-	fmt.sbprintfln(builder, "{}_narrow :: proc(value: {}) -> {} {{", proc_prefix, wide_type, raw_type)
+	fmt.sbprintfln(
+		builder,
+		"{}_narrow :: proc(value: {}) -> {} {{",
+		proc_prefix,
+		wide_type,
+		raw_type,
+	)
 	fmt.sbprintfln(builder, "\tif value > {}(FP_{}_MAX_RAW) {{", wide_type, upper)
 	fmt.sbprintfln(builder, "\t\treturn FP_{}_MAX_RAW", upper)
 	fmt.sbprintln(builder, "\t}")
@@ -355,10 +361,22 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 	fmt.sbprintln(builder, "\tif abs_remainder >= (d + 1) / 2 { quotient += -1 if n < 0 else 1 }")
 	fmt.sbprintln(builder, "\treturn quotient")
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_from_raw :: proc(raw: {}) -> {} {{", proc_prefix, raw_type, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_from_raw :: proc(raw: {}) -> {} {{",
+		proc_prefix,
+		raw_type,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\treturn {raw = raw}")
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_from_int :: proc(integer: {}) -> {} {{", proc_prefix, raw_type, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_from_int :: proc(integer: {}) -> {} {{",
+		proc_prefix,
+		raw_type,
+		type_name,
+	)
 	fmt.sbprintfln(
 		builder,
 		"\treturn {{raw = {}_narrow({}(integer) * FP_{}_SCALE)}}",
@@ -367,11 +385,23 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 		upper,
 	)
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_to_int :: proc(value: {}) -> {} {{", proc_prefix, type_name, raw_type)
+	fmt.sbprintfln(
+		builder,
+		"{}_to_int :: proc(value: {}) -> {} {{",
+		proc_prefix,
+		type_name,
+		raw_type,
+	)
 	fmt.sbprintfln(builder, "\treturn value.raw / {}(FP_{}_SCALE)", raw_type, upper)
 	fmt.sbprintln(builder, "}")
 
-	fmt.sbprintfln(builder, "{}_add :: proc(left, right: {}) -> {} {{", proc_prefix, type_name, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_add :: proc(left, right: {}) -> {} {{",
+		proc_prefix,
+		type_name,
+		type_name,
+	)
 	fmt.sbprintfln(
 		builder,
 		"\treturn {}_from_raw({}_narrow({}(left.raw) + {}(right.raw)))",
@@ -381,7 +411,13 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 		wide_type,
 	)
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_sub :: proc(left, right: {}) -> {} {{", proc_prefix, type_name, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_sub :: proc(left, right: {}) -> {} {{",
+		proc_prefix,
+		type_name,
+		type_name,
+	)
 	fmt.sbprintfln(
 		builder,
 		"\treturn {}_from_raw({}_narrow({}(left.raw) - {}(right.raw)))",
@@ -391,7 +427,13 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 		wide_type,
 	)
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_neg :: proc(value: {}) -> {} {{", proc_prefix, type_name, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_neg :: proc(value: {}) -> {} {{",
+		proc_prefix,
+		type_name,
+		type_name,
+	)
 	fmt.sbprintfln(
 		builder,
 		"\treturn {}_from_raw({}_narrow(-{}(value.raw)))",
@@ -400,7 +442,13 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 		wide_type,
 	)
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_mul :: proc(left, right: {}) -> {} {{", proc_prefix, type_name, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_mul :: proc(left, right: {}) -> {} {{",
+		proc_prefix,
+		type_name,
+		type_name,
+	)
 	fmt.sbprintfln(builder, "\tproduct := {}(left.raw) * {}(right.raw)", wide_type, wide_type)
 	fmt.sbprintfln(
 		builder,
@@ -411,7 +459,13 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 		upper,
 	)
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_div :: proc(left, right: {}) -> {} {{", proc_prefix, type_name, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_div :: proc(left, right: {}) -> {} {{",
+		proc_prefix,
+		type_name,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\tif right.raw == 0 {")
 	fmt.sbprintfln(
 		builder,
@@ -434,19 +488,39 @@ emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaratio
 	fmt.sbprintfln(builder, "{}_equal :: proc(left, right: {}) -> bool {{", proc_prefix, type_name)
 	fmt.sbprintln(builder, "\treturn left.raw == right.raw")
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_not_equal :: proc(left, right: {}) -> bool {{", proc_prefix, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_not_equal :: proc(left, right: {}) -> bool {{",
+		proc_prefix,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\treturn left.raw != right.raw")
 	fmt.sbprintln(builder, "}")
 	fmt.sbprintfln(builder, "{}_less :: proc(left, right: {}) -> bool {{", proc_prefix, type_name)
 	fmt.sbprintln(builder, "\treturn left.raw < right.raw")
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_less_equal :: proc(left, right: {}) -> bool {{", proc_prefix, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_less_equal :: proc(left, right: {}) -> bool {{",
+		proc_prefix,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\treturn left.raw <= right.raw")
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_greater :: proc(left, right: {}) -> bool {{", proc_prefix, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_greater :: proc(left, right: {}) -> bool {{",
+		proc_prefix,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\treturn left.raw > right.raw")
 	fmt.sbprintln(builder, "}")
-	fmt.sbprintfln(builder, "{}_greater_equal :: proc(left, right: {}) -> bool {{", proc_prefix, type_name)
+	fmt.sbprintfln(
+		builder,
+		"{}_greater_equal :: proc(left, right: {}) -> bool {{",
+		proc_prefix,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\treturn left.raw >= right.raw")
 	fmt.sbprintln(builder, "}")
 	return true
@@ -600,7 +674,10 @@ emit_component_runtime :: proc(
 		"\tensure(entities_arena_error == nil, \"initialize_{}_component_manager: entities arena initialization failed\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\treverse_packed_entities_lookup_arena_error := vmem.arena_init_growing(")
+	fmt.sbprintln(
+		builder,
+		"\treverse_packed_entities_lookup_arena_error := vmem.arena_init_growing(",
+	)
 	fmt.sbprintln(builder, "\t\t&component_manager.reverse_packed_entities_lookup_arena,")
 	fmt.sbprintln(builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
 	fmt.sbprintln(builder, "\t)")
@@ -626,7 +703,10 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\t\t[dynamic]u32,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\t0,")
-	fmt.sbprintln(builder, "\t\tvmem.arena_allocator(&component_manager.reverse_packed_entities_lookup_arena),")
+	fmt.sbprintln(
+		builder,
+		"\t\tvmem.arena_allocator(&component_manager.reverse_packed_entities_lookup_arena),",
+	)
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintln(builder, "\treturn memory_region")
 	fmt.sbprintln(builder, "}")
@@ -637,7 +717,11 @@ emit_component_runtime :: proc(
 		"has_{}_component :: proc(engine: ^Axiom_Engine, entity_id: Entity_ID) -> bool {{",
 		value_name,
 	)
-	fmt.sbprintfln(builder, "\tensure(engine != nil, \"has_{}_component: engine is nil\")", value_name)
+	fmt.sbprintfln(
+		builder,
+		"\tensure(engine != nil, \"has_{}_component: engine is nil\")",
+		value_name,
+	)
 	fmt.sbprintln(builder, "\tentity_system := get_entity_system(engine)")
 	fmt.sbprintfln(
 		builder,
@@ -683,13 +767,25 @@ emit_component_runtime :: proc(
 		value_name,
 	)
 	fmt.sbprintln(builder, "\tcomponent_entity_index := get_entity_index(entity_id)")
-	fmt.sbprintln(builder, "\tcomponent_index := component_manager.sparse_entities[component_entity_index]")
+	fmt.sbprintln(
+		builder,
+		"\tcomponent_index := component_manager.sparse_entities[component_entity_index]",
+	)
 	fmt.sbprintln(builder, "\tlast_component_index := u32(len(component_manager.components) - 1)")
 	fmt.sbprintln(builder, "\tlast_component_entity_id := Entity_ID{")
-	fmt.sbprintln(builder, "\t\tid = component_manager.reverse_packed_entities_lookup[last_component_index],")
+	fmt.sbprintln(
+		builder,
+		"\t\tid = component_manager.reverse_packed_entities_lookup[last_component_index],",
+	)
 	fmt.sbprintln(builder, "\t}")
-	fmt.sbprintln(builder, "\tlast_component_entity_index := get_entity_index(last_component_entity_id)")
-	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities[component_entity_index] = MAX_ENTITIES")
+	fmt.sbprintln(
+		builder,
+		"\tlast_component_entity_index := get_entity_index(last_component_entity_id)",
+	)
+	fmt.sbprintln(
+		builder,
+		"\tcomponent_manager.sparse_entities[component_entity_index] = MAX_ENTITIES",
+	)
 	fmt.sbprintln(builder)
 	fmt.sbprintln(builder, "\tif component_index == last_component_index {")
 	fmt.sbprintln(builder, "\t\tpop(&component_manager.components)")
@@ -698,8 +794,14 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\t}")
 	fmt.sbprintln(builder)
 	fmt.sbprintln(builder, "\tunordered_remove(&component_manager.components, component_index)")
-	fmt.sbprintln(builder, "\tunordered_remove(&component_manager.reverse_packed_entities_lookup, component_index)")
-	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities[last_component_entity_index] = component_index")
+	fmt.sbprintln(
+		builder,
+		"\tunordered_remove(&component_manager.reverse_packed_entities_lookup, component_index)",
+	)
+	fmt.sbprintln(
+		builder,
+		"\tcomponent_manager.sparse_entities[last_component_entity_index] = component_index",
+	)
 	fmt.sbprintln(builder, "}")
 	fmt.sbprintln(builder)
 
@@ -708,7 +810,11 @@ emit_component_runtime :: proc(
 		"add_{}_component_to_entity_system :: proc(engine: ^Axiom_Engine, entity_system: ^Entity_System, entity_id: Entity_ID) -> bool {{",
 		value_name,
 	)
-	fmt.sbprintfln(builder, "\tensure(engine != nil, \"add_{}_component_to_entity_system: engine is nil\")", value_name)
+	fmt.sbprintfln(
+		builder,
+		"\tensure(engine != nil, \"add_{}_component_to_entity_system: engine is nil\")",
+		value_name,
+	)
 	fmt.sbprintfln(
 		builder,
 		"\tensure(entity_system != nil, \"add_{}_component_to_entity_system: entity system is nil\")",
@@ -727,15 +833,24 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\t\told_length := len(component_manager.sparse_entities)")
 	fmt.sbprintln(builder, "\t\tnew_length := entity_index + 1")
 	fmt.sbprintln(builder, "\t\tif new_length > cap(component_manager.sparse_entities) {")
-	fmt.sbprintln(builder, "\t\t\tnew_capacity := max(new_length, max(8, 2 * cap(component_manager.sparse_entities)))")
-	fmt.sbprintln(builder, "\t\t\treserve_error := reserve(&component_manager.sparse_entities, new_capacity)")
+	fmt.sbprintln(
+		builder,
+		"\t\t\tnew_capacity := max(new_length, max(8, 2 * cap(component_manager.sparse_entities)))",
+	)
+	fmt.sbprintln(
+		builder,
+		"\t\t\treserve_error := reserve(&component_manager.sparse_entities, new_capacity)",
+	)
 	fmt.sbprintfln(
 		builder,
 		"\t\t\tensure(reserve_error == nil, \"add_{}_component_to_entity_system: sparse entity reservation failed\")",
 		value_name,
 	)
 	fmt.sbprintln(builder, "\t\t}")
-	fmt.sbprintln(builder, "\t\tresize_error := resize(&component_manager.sparse_entities, new_length)")
+	fmt.sbprintln(
+		builder,
+		"\t\tresize_error := resize(&component_manager.sparse_entities, new_length)",
+	)
 	fmt.sbprintfln(
 		builder,
 		"\t\tensure(resize_error == nil, \"add_{}_component_to_entity_system: sparse entity resize failed\")",
@@ -748,9 +863,16 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder)
 	fmt.sbprintln(builder, "\tcomponent_index := u32(len(component_manager.components))")
 	fmt.sbprintfln(builder, "\tappend(&component_manager.components, Component_{}{{}})", type_name)
-	fmt.sbprintln(builder, "\tappend(&component_manager.reverse_packed_entities_lookup, entity_id.id)")
+	fmt.sbprintln(
+		builder,
+		"\tappend(&component_manager.reverse_packed_entities_lookup, entity_id.id)",
+	)
 	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities[entity_index] = component_index")
-	fmt.sbprintfln(builder, "\t{}_component := &component_manager.components[component_index]", value_name)
+	fmt.sbprintfln(
+		builder,
+		"\t{}_component := &component_manager.components[component_index]",
+		value_name,
+	)
 	fmt.sbprintfln(builder, "\t_ = {}_component", value_name)
 	fmt.sbprintln(builder, "\t// initialize")
 	fmt.sbprintln(builder)
@@ -801,7 +923,10 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	begin_generated_file(&builder)
 	fmt.sbprintln(&builder, "import vmem \"core:mem/virtual\"")
 	fmt.sbprintln(&builder)
-	fmt.sbprintln(&builder, "Destroy_Component_Proc :: #type proc(engine: ^Axiom_Engine, entity_id: Entity_ID)")
+	fmt.sbprintln(
+		&builder,
+		"Destroy_Component_Proc :: #type proc(engine: ^Axiom_Engine, entity_id: Entity_ID)",
+	)
 	fmt.sbprintln(&builder, "Axiom_Generated_Component_Manager_Table :: struct {")
 	fmt.sbprintln(&builder, "\tdestroy_component: Destroy_Component_Proc,")
 	fmt.sbprintln(&builder, "\tregion:            ^Memory_Region,")
@@ -810,13 +935,19 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder)
 	fmt.sbprintln(&builder, "Axiom_Generated_Engine_Runtime :: struct {")
 	fmt.sbprintln(&builder, "\tcomponent_managers_arena: vmem.Arena,")
-	fmt.sbprintln(&builder, "\tcomponent_managers:       [dynamic]Axiom_Generated_Component_Manager_Table,")
+	fmt.sbprintln(
+		&builder,
+		"\tcomponent_managers:       [dynamic]Axiom_Generated_Component_Manager_Table,",
+	)
 	fmt.sbprintln(&builder, "}")
 	fmt.sbprintln(&builder)
 	fmt.sbprintln(&builder, "get_axiom_generated_engine_runtime :: proc(")
 	fmt.sbprintln(&builder, "\tengine: ^Axiom_Engine,")
 	fmt.sbprintln(&builder, ") -> ^Axiom_Generated_Engine_Runtime {")
-	fmt.sbprintln(&builder, "\tensure(engine != nil, \"get_axiom_generated_engine_runtime: engine is nil\")")
+	fmt.sbprintln(
+		&builder,
+		"\tensure(engine != nil, \"get_axiom_generated_engine_runtime: engine is nil\")",
+	)
 	fmt.sbprintln(
 		&builder,
 		"\tensure(engine.engine_memory_region != nil, \"get_axiom_generated_engine_runtime: engine memory region is nil\")",
@@ -834,7 +965,10 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder, "}")
 	fmt.sbprintln(&builder)
 	fmt.sbprintln(&builder, "initialize_axiom_components :: proc(engine: ^Axiom_Engine) {")
-	fmt.sbprintln(&builder, "\tensure(engine != nil, \"initialize_axiom_components: engine is nil\")")
+	fmt.sbprintln(
+		&builder,
+		"\tensure(engine != nil, \"initialize_axiom_components: engine is nil\")",
+	)
 	fmt.sbprintln(
 		&builder,
 		"\tensure(engine.engine_memory_region != nil, \"initialize_axiom_components: engine memory region is nil\")",
@@ -860,7 +994,10 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder, "\t\t[dynamic]Axiom_Generated_Component_Manager_Table,")
 	fmt.sbprintln(&builder, "\t\t0,")
 	fmt.sbprintln(&builder, "\t\t0,")
-	fmt.sbprintln(&builder, "\t\tvmem.arena_allocator(&generated_runtime.component_managers_arena),")
+	fmt.sbprintln(
+		&builder,
+		"\t\tvmem.arena_allocator(&generated_runtime.component_managers_arena),",
+	)
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(&builder)
 	for index := len(schema.components) - 1; index >= 0; index -= 1 {
@@ -904,10 +1041,7 @@ generated_file_name :: proc(kind, declaration_name: string) -> string {
 }
 
 write_generated_file :: proc(output_directory, file_name, contents: string) -> bool {
-	path, path_err := filepath.join(
-		{output_directory, file_name},
-		runtime.heap_allocator(),
-	)
+	path, path_err := filepath.join({output_directory, file_name}, runtime.heap_allocator())
 	if path_err != nil {
 		fmt.eprintfln("AxiomMetaGen: could not build output path for {}: {}", file_name, path_err)
 		return false
@@ -977,11 +1111,13 @@ is_owned_generated_file :: proc(file_name: string) -> bool {
 	if !strings.has_suffix(file_name, ".odin") {
 		return false
 	}
-	return file_name == "generated.odin" ||
-	       file_name == "generated_api.odin" ||
-	       strings.has_prefix(file_name, "generated_fixed_") ||
-	       strings.has_prefix(file_name, "generated_vector_") ||
-	       strings.has_prefix(file_name, "generated_component_")
+	return(
+		file_name == "generated.odin" ||
+		file_name == "generated_api.odin" ||
+		strings.has_prefix(file_name, "generated_fixed_") ||
+		strings.has_prefix(file_name, "generated_vector_") ||
+		strings.has_prefix(file_name, "generated_component_") \
+	)
 }
 
 file_name_is_expected :: proc(file_name: string, expected: []string) -> bool {
@@ -994,12 +1130,13 @@ file_name_is_expected :: proc(file_name: string, expected: []string) -> bool {
 }
 
 remove_stale_generated_files :: proc(output_directory: string, expected: []string) -> bool {
-	files, read_err := os.read_all_directory_by_path(
-		output_directory,
-		runtime.heap_allocator(),
-	)
+	files, read_err := os.read_all_directory_by_path(output_directory, runtime.heap_allocator())
 	if read_err != nil {
-		fmt.eprintfln("AxiomMetaGen: could not scan output directory {}: {}", output_directory, read_err)
+		fmt.eprintfln(
+			"AxiomMetaGen: could not scan output directory {}: {}",
+			output_directory,
+			read_err,
+		)
 		return false
 	}
 	defer os.file_info_slice_delete(files, runtime.heap_allocator())
@@ -1011,7 +1148,11 @@ remove_stale_generated_files :: proc(output_directory: string, expected: []strin
 			continue
 		}
 		if remove_err := os.remove(file.fullpath); remove_err != nil {
-			fmt.eprintfln("AxiomMetaGen: could not remove stale output {}: {}", file.fullpath, remove_err)
+			fmt.eprintfln(
+				"AxiomMetaGen: could not remove stale output {}: {}",
+				file.fullpath,
+				remove_err,
+			)
 			return false
 		}
 	}
@@ -1045,10 +1186,7 @@ remove_legacy_generated_directory :: proc(source_directory: string) -> bool {
 		return false
 	}
 
-	files, read_err := os.read_all_directory_by_path(
-		legacy_directory,
-		runtime.heap_allocator(),
-	)
+	files, read_err := os.read_all_directory_by_path(legacy_directory, runtime.heap_allocator())
 	if read_err != nil {
 		fmt.eprintfln(
 			"AxiomMetaGen: could not inspect legacy generated directory {}: {}",
@@ -1105,10 +1243,114 @@ emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> boo
 	return true
 }
 
+import "core:fmt"
+import vmem "core:mem/virtual"
+import ast "core:odin/ast"
+import parser "core:odin/parser"
+import "core:os"
+
+
+has_attribute :: proc(decl: ^ast.Value_Decl, name: string) -> bool {
+	for attribute in decl.attributes {
+		for element in attribute.elems {
+			if identifier, ok := element.derived.(^ast.Ident); ok && identifier.name == name {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+inspect_odin_file :: proc(path: string) -> bool {
+	arena: vmem.Arena
+	err := vmem.arena_init_growing(&arena)
+	ensure(err != nil, "failed to allocatee odin parser arena")
+	defer vmem.arena_destroy(&arena)
+	context.allocator = vmem.arena_allocator(&arena)
+	context.temp_allocator = context.allocator
+
+	bytes, read_error := os.read_entire_file(path, context.allocator)
+	if read_error != nil {
+		fmt.eprintln("Could not read", path, read_error)
+		return false
+	}
+
+	file := ast.File {
+		fullpath = path,
+		src      = string(bytes),
+	}
+	p := parser.default_parser()
+	parsed := parser.parse_file(&p, &file)
+	if !parsed || file.syntax_error_count != 0 || p.tok.error_count != 0 {
+		return false
+	}
+
+	for statement in file.decls {
+		declaration, ok := statement.derived.(^ast.Value_Decl)
+		if !ok || !has_attribute(declaration, "axiom_system") {
+			continue
+		}
+
+		if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
+			fmt.eprintln("expeccted one named system procedure", path)
+			return false
+		}
+
+		name, name_ok := declaration.names[0].derived.(^ast.Ident)
+		literal, literal_ok := declaration.values[0].derived.(^ast.Proc_Lit)
+		if !name_ok || !literal_ok || literal.body == nil || literal.type.generic {
+			fmt.eprintln("Expected a non-generic system procedure with a body", path)
+			return false
+		}
+
+		fmt.println("system:", name.name)
+		for field in literal.type.params.list {
+			type_expression := field.type
+			if type_expression == nil || field.default_value != nil || field.flags != {} {
+				fmt.eprintln("explicitly typed parameters are expected", name.name)
+				return false
+			}
+
+			access := "read"
+			if pointer, ok := type_expression.derived.(^ast.Pointer_Type); ok {
+				access = "read/write"
+				type_expression = pointer.elem
+			}
+			component, ok := type_expression.derived.(^ast.Ident)
+
+			if !ok {
+				fmt.eprintln("Only T or ^T is allowed for types")
+				return false
+			}
+
+			if component.name == "Entity" {
+				access = "entity"
+			}
+
+			// grouped names e.g name1, name2: ^Transform
+			for parameter in field.names {
+				identifier, ok := parameter.derived.(^ast.Ident)
+				if !ok {
+					return false
+				}
+				fmt.printf("  %s: %s (%s)\n", identifier.name, component.name, access)
+			}
+		}
+
+
+	}
+
+
+	return false
+}
+
 main :: proc() {
 	args := os.args
 	if len(args) < 3 {
-		fmt.eprintln("usage: axiom-metagen <source-directory> <schema-directory|schema.axmeta> [...]")
+		fmt.eprintln(
+			"usage: axiom-metagen <source-directory> <schema-directory|schema.axmeta> [...]",
+		)
 		os.exit(1)
 	}
 
