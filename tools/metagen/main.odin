@@ -186,20 +186,20 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 				return false
 			}
 			input_index := len(system.inputs)
-			_, alloc_err = append(
-				&system.inputs,
-				Meta_Property{type = component.name, name = name.name, access = access},
-			)
-			if alloc_err != nil {
-				return false
-			}
 			// grouped names e.g name1, name2: ^Transform
 			for parameter in field.names {
 				identifier, ok := parameter.derived.(^ast.Ident)
 				if !ok {
 					return false
 				}
-				fmt.printf("  %s: %s (%s)\n", identifier.name, component.name, access)
+				_, alloc_err = append(
+					&system.inputs,
+					Meta_Property{type = component.name, name = identifier.name, access = access},
+				)
+				if alloc_err != nil {
+					return false
+				}
+
 			}
 		}
 
