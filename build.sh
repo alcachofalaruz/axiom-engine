@@ -49,7 +49,7 @@ MINGW*|MSYS*|CYGWIN*)
 esac
 
 # Shared by every engine target, including Neovim's RAD debug executable.
-odin_options+=(-custom-attribute:axiom_system "-collection:axiom=$collection_root")
+odin_options+=(-custom-attribute:axiom_system -custom-attribute:axiom_system_config "-collection:axiom=$collection_root")
 
 # Odin includes the Windows Box3D .lib in its vendor package. The Linux
 # bindings use the project's archive through the system-library search path.

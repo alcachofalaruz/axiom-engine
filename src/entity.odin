@@ -6,8 +6,35 @@ Entity_ID :: struct {
 	id: u32,
 }
 
+Entity_System_Tick_Group :: enum {
+	None,
+	Pre_Physics,
+}
+
 Components_Type_Mask :: struct {
 	word: [4]u64,
+}
+
+Entity_System_Configuration :: struct {
+	dependencies: [dynamic]string,
+	tick_group:   Entity_System_Tick_Group,
+}
+
+system_after :: proc(config: ^Entity_System_Configuration, system: string) {
+	append(&config.dependencies, system)
+	// Todo(Nacho): check alloc error
+}
+
+Update_System_Proc :: #type proc(engine: ^Axiom_Engine)
+Entity_System :: struct {
+	name:               string,
+	configuration:      Entity_System_Configuration,
+	update_system_proc: Update_System_Proc,
+	target_components:  Components_Type_Mask,
+}
+
+Entity_Component_System :: struct {
+	entity_list: Entity_List,
 }
 
 Entity_Component_Manager_Entry :: struct($T: typeid) {
@@ -38,10 +65,6 @@ Entity_List :: struct {
 	last_free:      u32,
 }
 
-Entity_System :: struct {
-	entity_list: Entity_List,
-}
-
 Axiom_Component_System_Parameters :: struct {
 	max_components:          u32,
 	preallocated_components: u32,
@@ -67,7 +90,7 @@ entity_equals :: proc(left, right: Entity_ID) -> bool {
 	)
 }
 
-make_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_System {
+make_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_Component_System {
 	if engine == nil || engine.engine_memory_table == nil {
 		return nil
 	}
@@ -80,13 +103,14 @@ make_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_System {
 	if region == nil {
 		return nil
 	}
+
 	engine.entity_system_region = region
 
 	if region.used != 0 {
-		return memory_region_offset_dereference(Entity_System, region, {offset = 0})
+		return memory_region_offset_dereference(Entity_Component_System, region, {offset = 0})
 	}
 
-	entity_system, allocation := memory_region_push_struct(Entity_System, region)
+	entity_system, allocation := memory_region_push_struct(Entity_Component_System, region)
 	if entity_system == nil || !memory_region_allocation_is_valid(allocation) {
 		return nil
 	}
@@ -109,7 +133,7 @@ make_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_System {
 	return entity_system
 }
 
-get_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_System {
+get_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_Component_System {
 	if engine == nil {
 		return nil
 	}
@@ -119,17 +143,17 @@ get_entity_system :: proc(engine: ^Axiom_Engine) -> ^Entity_System {
 		return nil
 	}
 
-	return cast(^Entity_System)region.base
+	return cast(^Entity_Component_System)region.base
 }
 
-get_entity :: proc(entity_system: ^Entity_System, id: Entity_ID) -> Entity_Description {
+get_entity :: proc(entity_system: ^Entity_Component_System, id: Entity_ID) -> Entity_Description {
 	if entity_system == nil || !entity_is_valid(entity_system, id) {
 		return {}
 	}
 	return entity_system.entity_list.entities[get_entity_index(id)]
 }
 
-entity_is_valid :: proc(entity_system: ^Entity_System, id: Entity_ID) -> bool {
+entity_is_valid :: proc(entity_system: ^Entity_Component_System, id: Entity_ID) -> bool {
 	if entity_system == nil {
 		return false
 	}
@@ -140,7 +164,7 @@ entity_is_valid :: proc(entity_system: ^Entity_System, id: Entity_ID) -> bool {
 	return entity_equals(entity_system.entity_list.entities[index].id, id)
 }
 
-create_entity :: proc(entity_system: ^Entity_System) -> Entity_ID {
+create_entity :: proc(entity_system: ^Entity_Component_System) -> Entity_ID {
 	if entity_system == nil {
 		return {id = MAX_ENTITIES}
 	}
@@ -178,7 +202,11 @@ create_entity :: proc(entity_system: ^Entity_System) -> Entity_ID {
 	return free_entity.id
 }
 
-destroy_entity :: proc(engine: ^Axiom_Engine, entity_system: ^Entity_System, entity: Entity_ID) {
+destroy_entity :: proc(
+	engine: ^Axiom_Engine,
+	entity_system: ^Entity_Component_System,
+	entity: Entity_ID,
+) {
 	if !entity_is_valid(entity_system, entity) {
 		return
 	}
@@ -210,7 +238,7 @@ destroy_entity :: proc(engine: ^Axiom_Engine, entity_system: ^Entity_System, ent
 }
 
 entity_has_component :: proc(
-	entity_system: ^Entity_System,
+	entity_system: ^Entity_Component_System,
 	id: Entity_ID,
 	component_index: u32,
 ) -> bool {
@@ -229,7 +257,7 @@ entity_has_component :: proc(
 }
 
 entity_remove_component_mask :: proc(
-	entity_system: ^Entity_System,
+	entity_system: ^Entity_Component_System,
 	id: Entity_ID,
 	component_index: u32,
 ) -> bool {
@@ -252,7 +280,7 @@ entity_remove_component_mask :: proc(
 }
 
 entity_add_component_mask :: proc(
-	entity_system: ^Entity_System,
+	entity_system: ^Entity_Component_System,
 	id: Entity_ID,
 	component_index: u32,
 ) -> bool {

@@ -46,15 +46,23 @@ Meta_System_Declaration :: struct {
 	inputs: [dynamic]Meta_Property,
 }
 
+Meta_System_Configs :: struct {
+	target_system:             string,
+	function_initializer_name: string,
+	dependencies:              [dynamic]string,
+	tick_group:                string,
+}
+
 Meta_Schema :: struct {
-	fixed:      [dynamic]Meta_Fixed_Declaration,
-	vectors:    [dynamic]Meta_Vector_Declaration,
-	components: [dynamic]Meta_Component_Declaration,
-	Systems:    [dynamic]Meta_System_Declaration,
+	fixed:          [dynamic]Meta_Fixed_Declaration,
+	vectors:        [dynamic]Meta_Vector_Declaration,
+	components:     [dynamic]Meta_Component_Declaration,
+	Systems:        [dynamic]Meta_System_Declaration,
+	System_configs: [dynamic]Meta_System_Configs,
 
 	// Names and finalized field/property slices live until schema_destroy.
-	storage:    vmem.Arena,
-	names:      strings.Intern,
+	storage:        vmem.Arena,
+	names:          strings.Intern,
 }
 
 Meta_Block_Kind :: enum {
@@ -107,16 +115,95 @@ is_primitive_type :: proc(name: string) -> bool {
 	return false
 }
 
-has_attribute :: proc(decl: ^ast.Value_Decl, name: string) -> bool {
+find_attribute :: proc(decl: ^ast.Value_Decl, name: string) -> (value: ^ast.Expr, found: bool) {
 	for attribute in decl.attributes {
 		for element in attribute.elems {
-			if identifier, ok := element.derived.(^ast.Ident); ok && identifier.name == name {
-				return true
+			name_expression := element
+			attribute_value: ^ast.Expr
+
+			if pair, ok := element.derived.(^ast.Field_Value); ok {
+				name_expression = pair.field
+				attribute_value = pair.value
+			}
+
+			if identifier, ok := name_expression.derived.(^ast.Ident);
+			   ok && identifier.name == name {
+				return attribute_value, true
 			}
 		}
 	}
 
-	return false
+	return nil, false
+}
+
+has_attribute :: proc(decl: ^ast.Value_Decl, name: string) -> bool {
+	_, found := find_attribute(decl, name)
+	return found
+}
+
+parse_system_odin :: proc(
+	schema: ^Meta_Schema,
+	declaration: ^ast.Value_Decl,
+	path: string,
+) -> bool {
+
+	alloc_err: runtime.Allocator_Error
+	if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
+		fmt.eprintln("expeccted one named system procedure", path)
+		return false
+	}
+
+	name, name_ok := declaration.names[0].derived.(^ast.Ident)
+	literal, literal_ok := declaration.values[0].derived.(^ast.Proc_Lit)
+	if !name_ok || !literal_ok || literal.body == nil || literal.type.generic {
+		fmt.eprintln("Expected a non-generic system procedure with a body", path)
+		return false
+	}
+	system_index := len(schema.Systems)
+	_, alloc_err = append(&schema.Systems, Meta_System_Declaration{name = name.name})
+	if alloc_err != nil {
+		return false
+	}
+	system := &schema.Systems[system_index]
+	fmt.println("system:", name.name)
+	for field in literal.type.params.list {
+		type_expression := field.type
+		if type_expression == nil || field.default_value != nil || field.flags != {} {
+			fmt.eprintln("explicitly typed parameters are expected", name.name)
+			return false
+		}
+
+		access := Meta_Access_Type.R
+		if pointer, ok := type_expression.derived.(^ast.Pointer_Type); ok {
+			access = Meta_Access_Type.RW
+			type_expression = pointer.elem
+		}
+		component, ok := type_expression.derived.(^ast.Ident)
+
+		if !ok {
+			fmt.eprintln("Only T or ^T is allowed for types")
+			return false
+		}
+		input_index := len(system.inputs)
+		// grouped names e.g name1, name2: ^Transform
+		for parameter in field.names {
+			identifier, ok := parameter.derived.(^ast.Ident)
+			if !ok {
+				return false
+			}
+			_, alloc_err = append(
+				&system.inputs,
+				Meta_Property{type = component.name, name = identifier.name, access = access},
+			)
+			if alloc_err != nil {
+				return false
+			}
+
+		}
+
+	}
+
+	return true
 }
 
 parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
@@ -145,67 +232,24 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 	alloc_err: runtime.Allocator_Error
 	for statement in file.decls {
 		declaration, ok := statement.derived.(^ast.Value_Decl)
-		if !ok || !has_attribute(declaration, "axiom_system") {
+		if !ok {
+			return false
+		}
+		if has_attribute(declaration, "axiom_system") {
+			if !parse_system_odin(schema, declaration, path) {
+				return false
+			}
 			continue
 		}
 
-		if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
-			fmt.eprintln("expeccted one named system procedure", path)
-			return false
+		expr, is_config := find_attribute(declaration, "axiom_system_config")
+		if (is_config) {
+			fdasfdasfdasfas
+			parse; system; init; here
+			continue
 		}
-
-		name, name_ok := declaration.names[0].derived.(^ast.Ident)
-		literal, literal_ok := declaration.values[0].derived.(^ast.Proc_Lit)
-		if !name_ok || !literal_ok || literal.body == nil || literal.type.generic {
-			fmt.eprintln("Expected a non-generic system procedure with a body", path)
-			return false
-		}
-		system_index := len(schema.Systems)
-		_, alloc_err = append(&schema.Systems, Meta_System_Declaration{name = name.name})
-		if alloc_err != nil {
-			return false
-		}
-		system := &schema.Systems[system_index]
-		fmt.println("system:", name.name)
-		for field in literal.type.params.list {
-			type_expression := field.type
-			if type_expression == nil || field.default_value != nil || field.flags != {} {
-				fmt.eprintln("explicitly typed parameters are expected", name.name)
-				return false
-			}
-
-			access := Meta_Access_Type.R
-			if pointer, ok := type_expression.derived.(^ast.Pointer_Type); ok {
-				access = Meta_Access_Type.RW
-				type_expression = pointer.elem
-			}
-			component, ok := type_expression.derived.(^ast.Ident)
-
-			if !ok {
-				fmt.eprintln("Only T or ^T is allowed for types")
-				return false
-			}
-			input_index := len(system.inputs)
-			// grouped names e.g name1, name2: ^Transform
-			for parameter in field.names {
-				identifier, ok := parameter.derived.(^ast.Ident)
-				if !ok {
-					return false
-				}
-				_, alloc_err = append(
-					&system.inputs,
-					Meta_Property{type = component.name, name = identifier.name, access = access},
-				)
-				if alloc_err != nil {
-					return false
-				}
-
-			}
-		}
-
 
 	}
-
 
 	return false
 }
@@ -1091,7 +1135,7 @@ emit_component_runtime :: proc(
 
 	fmt.sbprintfln(
 		builder,
-		"add_{}_component_to_entity_system :: proc(engine: ^Axiom_Engine, entity_system: ^Entity_System, entity_id: Entity_ID) -> bool {{",
+		"add_{}_component_to_entity_system :: proc(engine: ^Axiom_Engine, entity_system: ^Entity_Component_System, entity_id: Entity_ID) -> bool {{",
 		value_name,
 	)
 	fmt.sbprintfln(

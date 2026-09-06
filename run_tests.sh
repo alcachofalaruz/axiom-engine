@@ -28,6 +28,7 @@ fi
 
 "$odin_command" test ./src "${odin_options[@]}" \
 	-custom-attribute:axiom_system \
+	-custom-attribute:axiom_system_config  \
 	-define:BOX3D_SHARED=true \
 	"-extra-linker-flags:-L${box3d_link_directory}" \
 	"$@"
