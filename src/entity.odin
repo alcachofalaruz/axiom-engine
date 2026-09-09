@@ -43,8 +43,8 @@ Entity_Component_Manager_Entry :: struct($T: typeid) {
 	entities_arena:                       vmem.Arena,
 	reverse_packed_entities_lookup_arena: vmem.Arena,
 	components:                           [dynamic]T,
-	sparse_entities:                      [dynamic]u32,
-	reverse_packed_entities_lookup:       [dynamic]u32,
+	sparse_entities:                      [dynamic]Entity_ID,
+	reverse_packed_entities_lookup:       [dynamic]Entity_ID,
 }
 
 Entity_Component_Manager_Registry :: struct {

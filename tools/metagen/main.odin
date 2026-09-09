@@ -144,7 +144,7 @@ parse_system_odin :: proc(
 	declaration: ^ast.Value_Decl,
 	path: string,
 ) -> bool {
-
+	storage := vmem.arena_allocator(&schema.storage)
 	alloc_err: runtime.Allocator_Error
 	if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
 		fmt.eprintln("expeccted one named system procedure", path)
@@ -163,6 +163,7 @@ parse_system_odin :: proc(
 		return false
 	}
 	system := &schema.Systems[system_index]
+	system.inputs.allocator = storage
 	fmt.println("system:", name.name)
 	for field in literal.type.params.list {
 		type_expression := field.type
@@ -271,6 +272,7 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 		return false
 	}
 	alloc_err: runtime.Allocator_Error
+	system_file := false
 	for statement in file.decls {
 		declaration, ok := statement.derived.(^ast.Value_Decl)
 		if !ok {
@@ -281,6 +283,7 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 			if !parse_system_odin(schema, declaration, path) {
 				return false
 			}
+			system_file = true
 			continue
 		}
 
@@ -289,13 +292,13 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 			if !parse_system_configuration(schema, expr, declaration, path) {
 				return false
 			}
-
+			system_file = true
 			continue
 		}
 
 	}
 
-	return false
+	return system_file
 }
 
 parse_meta_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
@@ -1066,13 +1069,13 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\t\tvmem.arena_allocator(&component_manager.components_arena),")
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities = make(")
-	fmt.sbprintln(builder, "\t\t[dynamic]u32,")
+	fmt.sbprintln(builder, "\t\t[dynamic]Entity_ID,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\tvmem.arena_allocator(&component_manager.entities_arena),")
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintln(builder, "\tcomponent_manager.reverse_packed_entities_lookup = make(")
-	fmt.sbprintln(builder, "\t\t[dynamic]u32,")
+	fmt.sbprintln(builder, "\t\t[dynamic]Entity_ID,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(
@@ -1141,22 +1144,20 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\tcomponent_entity_index := get_entity_index(entity_id)")
 	fmt.sbprintln(
 		builder,
-		"\tcomponent_index := component_manager.sparse_entities[component_entity_index]",
+		"\tcomponent_index := component_manager.sparse_entities[component_entity_index].id",
 	)
 	fmt.sbprintln(builder, "\tlast_component_index := u32(len(component_manager.components) - 1)")
-	fmt.sbprintln(builder, "\tlast_component_entity_id := Entity_ID{")
 	fmt.sbprintln(
 		builder,
-		"\t\tid = component_manager.reverse_packed_entities_lookup[last_component_index],",
+		"\tlast_component_entity_id := component_manager.reverse_packed_entities_lookup[last_component_index]",
 	)
-	fmt.sbprintln(builder, "\t}")
 	fmt.sbprintln(
 		builder,
 		"\tlast_component_entity_index := get_entity_index(last_component_entity_id)",
 	)
 	fmt.sbprintln(
 		builder,
-		"\tcomponent_manager.sparse_entities[component_entity_index] = MAX_ENTITIES",
+		"\tcomponent_manager.sparse_entities[component_entity_index] = Entity_ID{id = MAX_ENTITIES}",
 	)
 	fmt.sbprintln(builder)
 	fmt.sbprintln(builder, "\tif component_index == last_component_index {")
@@ -1172,7 +1173,7 @@ emit_component_runtime :: proc(
 	)
 	fmt.sbprintln(
 		builder,
-		"\tcomponent_manager.sparse_entities[last_component_entity_index] = component_index",
+		"\tcomponent_manager.sparse_entities[last_component_entity_index] = Entity_ID{id = component_index}",
 	)
 	fmt.sbprintln(builder, "}")
 	fmt.sbprintln(builder)
@@ -1229,7 +1230,7 @@ emit_component_runtime :: proc(
 		value_name,
 	)
 	fmt.sbprintln(builder, "\t\tfor index := old_length; index < new_length; index += 1 {")
-	fmt.sbprintln(builder, "\t\t\tcomponent_manager.sparse_entities[index] = MAX_ENTITIES")
+	fmt.sbprintln(builder, "\t\t\tcomponent_manager.sparse_entities[index] = Entity_ID{id = MAX_ENTITIES}")
 	fmt.sbprintln(builder, "\t\t}")
 	fmt.sbprintln(builder, "\t}")
 	fmt.sbprintln(builder)
@@ -1237,9 +1238,9 @@ emit_component_runtime :: proc(
 	fmt.sbprintfln(builder, "\tappend(&component_manager.components, Component_{}{{}})", type_name)
 	fmt.sbprintln(
 		builder,
-		"\tappend(&component_manager.reverse_packed_entities_lookup, entity_id.id)",
+		"\tappend(&component_manager.reverse_packed_entities_lookup, entity_id)",
 	)
-	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities[entity_index] = component_index")
+	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities[entity_index] = Entity_ID{id = component_index}")
 	fmt.sbprintfln(
 		builder,
 		"\t{}_component := &component_manager.components[component_index]",
@@ -1287,25 +1288,45 @@ begin_generated_file :: proc(builder: ^strings.Builder) {
 
 system_component_name :: proc(schema: ^Meta_Schema, input: Meta_Property) -> string {
 	for component in schema.components {
-		if strings.has_prefix(input.type, "Component_") && input.type[len("Component_"):] == odin_type_name(component.name) {
+		if strings.has_prefix(input.type, "Component_") &&
+		   input.type[len("Component_"):] == odin_type_name(component.name) {
 			return odin_value_name(component.name)
 		}
 	}
 	return ""
 }
 
-emit_system_wrapper :: proc(builder: ^strings.Builder, schema: ^Meta_Schema, system: Meta_System_Declaration) {
+emit_system_wrapper :: proc(
+	builder: ^strings.Builder,
+	schema: ^Meta_Schema,
+	system: Meta_System_Declaration,
+) {
 	fmt.sbprintfln(builder, "{}_update_wrapper :: proc(engine: ^Axiom_Engine) {{", system.name)
 	if len(system.inputs) == 0 {
 		fmt.sbprintfln(builder, "\t{}()", system.name)
 	} else {
 		for input, index in system.inputs {
-			fmt.sbprintfln(builder, "\tmanager_{} := get_{}_component_manager(engine)", index, system_component_name(schema, input))
+			fmt.sbprintfln(
+				builder,
+				"\tmanager_{} := get_{}_component_manager(engine)",
+				index,
+				system_component_name(schema, input),
+			)
 		}
-		fmt.sbprintln(builder, "\tfor raw_entity_id in manager_0.reverse_packed_entities_lookup {")
-		fmt.sbprintln(builder, "\t\tentity_id := Entity_ID{id = raw_entity_id}")
+		// Component managers have different concrete types, but share an entity slice type.
+		fmt.sbprintln(builder, "\tentities := manager_0.reverse_packed_entities_lookup[:]")
+		for index := 1; index < len(system.inputs); index += 1 {
+			fmt.sbprintfln(builder, "\tif len(manager_{}.reverse_packed_entities_lookup) < len(entities) {{", index)
+			fmt.sbprintfln(builder, "\t\tentities = manager_{}.reverse_packed_entities_lookup[:]", index)
+			fmt.sbprintln(builder, "\t}")
+		}
+		fmt.sbprintln(builder, "\tfor entity_id in entities {")
 		for input in system.inputs {
-			fmt.sbprintfln(builder, "\t\tif !has_{}_component(engine, entity_id) {{", system_component_name(schema, input))
+			fmt.sbprintfln(
+				builder,
+				"\t\tif !has_{}_component(engine, entity_id) {{",
+				system_component_name(schema, input),
+			)
 			fmt.sbprintln(builder, "\t\t\tcontinue")
 			fmt.sbprintln(builder, "\t\t}")
 		}
@@ -1313,7 +1334,13 @@ emit_system_wrapper :: proc(builder: ^strings.Builder, schema: ^Meta_Schema, sys
 		fmt.sbprintfln(builder, "\t\t{}(", system.name)
 		for input, index in system.inputs {
 			prefix := "&" if input.access == .RW else ""
-			fmt.sbprintfln(builder, "\t\t\t{}manager_{}.components[manager_{}.sparse_entities[entity_index]],", prefix, index, index)
+			fmt.sbprintfln(
+				builder,
+				"\t\t\t{}manager_{}.components[manager_{}.sparse_entities[entity_index].id],",
+				prefix,
+				index,
+				index,
+			)
 		}
 		fmt.sbprintln(builder, "\t\t)")
 		fmt.sbprintln(builder, "\t}")
@@ -1326,7 +1353,11 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	for system in schema.Systems {
 		for input in system.inputs {
 			if system_component_name(schema, input) == "" {
-				fmt.eprintfln("AxiomMetaGen: unknown component type {} in system {}", input.type, system.name)
+				fmt.eprintfln(
+					"AxiomMetaGen: unknown component type {} in system {}",
+					input.type,
+					system.name,
+				)
 				return false
 			}
 		}
@@ -1340,7 +1371,11 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			}
 		}
 		if !found {
-			fmt.eprintfln("AxiomMetaGen: unknown system {} for configuration {}", config.target_system, config.function_initializer_name)
+			fmt.eprintfln(
+				"AxiomMetaGen: unknown system {} for configuration {}",
+				config.target_system,
+				config.function_initializer_name,
+			)
 			return false
 		}
 	}
@@ -1428,10 +1463,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder, "\t\t[dynamic]Axiom_Generated_Component_Manager_Table,")
 	fmt.sbprintln(&builder, "\t\t0,")
 	fmt.sbprintln(&builder, "\t\t0,")
-	fmt.sbprintln(
-		&builder,
-		"\t\tvmem.arena_allocator(&generated_runtime.ecs_arena),",
-	)
+	fmt.sbprintln(&builder, "\t\tvmem.arena_allocator(&generated_runtime.ecs_arena),")
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(&builder)
 	for index := len(schema.components) - 1; index >= 0; index -= 1 {
@@ -1457,7 +1489,10 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		)
 	}
 	fmt.sbprintln(&builder)
-	fmt.sbprintln(&builder, "\tgenerated_runtime.systems = make([dynamic]Entity_System, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))")
+	fmt.sbprintln(
+		&builder,
+		"\tgenerated_runtime.systems = make([dynamic]Entity_System, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))",
+	)
 	for system, index in schema.Systems {
 		fmt.sbprintfln(&builder, "\t_, system_{}_append_error := append(", index)
 		fmt.sbprintln(&builder, "\t\t&generated_runtime.systems,")
@@ -1466,7 +1501,12 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		fmt.sbprintfln(&builder, "\t\t\tupdate_system_proc = {}_update_wrapper,", system.name)
 		fmt.sbprintln(&builder, "\t\t},")
 		fmt.sbprintln(&builder, "\t)")
-		fmt.sbprintfln(&builder, "\tensure(system_{}_append_error == nil, \"initialize_axiom_components: failed to register {} system\")", index, system.name)
+		fmt.sbprintfln(
+			&builder,
+			"\tensure(system_{}_append_error == nil, \"initialize_axiom_components: failed to register {} system\")",
+			index,
+			system.name,
+		)
 		for input, input_index in system.inputs {
 			// Grouped parameters may refer to the same component; set its bit once.
 			duplicate := false
@@ -1480,15 +1520,30 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 				continue
 			}
 			upper := strings.to_upper(system_component_name(schema, input), context.temp_allocator)
-			fmt.sbprintfln(&builder, "\tensure(entity_add_component_mask(&generated_runtime.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")", index, upper, system.name)
+			fmt.sbprintfln(
+				&builder,
+				"\tensure(entity_add_component_mask(&generated_runtime.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
+				index,
+				upper,
+				system.name,
+			)
 		}
-		fmt.sbprintfln(&builder, "\tgenerated_runtime.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))", index)
+		fmt.sbprintfln(
+			&builder,
+			"\tgenerated_runtime.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))",
+			index,
+		)
 	}
 	// All systems are registered before their configuration callbacks run.
 	for system, index in schema.Systems {
 		for config in schema.System_configs {
 			if config.target_system == system.name {
-				fmt.sbprintfln(&builder, "\t{}(&generated_runtime.systems[{}].configuration)", config.function_initializer_name, index)
+				fmt.sbprintfln(
+					&builder,
+					"\t{}(&generated_runtime.systems[{}].configuration)",
+					config.function_initializer_name,
+					index,
+				)
 			}
 		}
 	}
