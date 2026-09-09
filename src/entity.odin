@@ -299,3 +299,16 @@ entity_add_component_mask :: proc(
 	entity.owned_components_mask.word[word_index] |= component_bit
 	return true
 }
+
+entity_add_component_mask :: proc(mask: ^Components_Type_Mask, component_index: u32) -> bool {
+	word_index := component_index / 64
+	if word_index >= len(Components_Type_Mask{}.word) {
+		return false
+	}
+	component_bit := u64(1) << (component_index % 64)
+	if (mask.word[word_index] & component_bit) != 0 {
+		return false
+	}
+	mask.word[word_index] |= component_bit
+	return true
+}

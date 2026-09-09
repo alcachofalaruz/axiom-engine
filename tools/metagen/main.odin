@@ -49,8 +49,6 @@ Meta_System_Declaration :: struct {
 Meta_System_Configs :: struct {
 	target_system:             string,
 	function_initializer_name: string,
-	dependencies:              [dynamic]string,
-	tick_group:                string,
 }
 
 Meta_Schema :: struct {
@@ -206,6 +204,49 @@ parse_system_odin :: proc(
 	return true
 }
 
+parse_system_configuration :: proc(
+	schema: ^Meta_Schema,
+	attribute_target: ^ast.Expr,
+	declaration: ^ast.Value_Decl,
+	path: string,
+) -> bool {
+	alloc_err: runtime.Allocator_Error
+	if len(declaration.names) != 1 || len(declaration.values) != 1 || declaration.is_mutable {
+		fmt.eprintln("expeccted one named system procedure", path)
+		return false
+	}
+
+	name, name_ok := declaration.names[0].derived.(^ast.Ident)
+	literal, literal_ok := declaration.values[0].derived.(^ast.Proc_Lit)
+	target_name, target_name_ok := attribute_target.derived.(^ast.Ident)
+	if !name_ok ||
+	   !literal_ok ||
+	   !target_name_ok ||
+	   target_name == nil ||
+	   literal.body == nil ||
+	   literal.type.generic {
+		fmt.eprintln("Expected a non-generic system procedure with a body", path)
+		return false
+	}
+
+	system_config_index := len(schema.System_configs)
+
+	_, alloc_err = append(
+		&schema.System_configs,
+		Meta_System_Configs {
+			target_system = target_name.name,
+			function_initializer_name = name.name,
+		},
+	)
+	if alloc_err != nil {
+		return false
+	}
+	system := &schema.System_configs[system_config_index]
+	fmt.println("system config:", target_name.name)
+
+	return true
+}
+
 parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 	arena: vmem.Arena
 	err := vmem.arena_init_growing(&arena)
@@ -235,6 +276,7 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 		if !ok {
 			return false
 		}
+
 		if has_attribute(declaration, "axiom_system") {
 			if !parse_system_odin(schema, declaration, path) {
 				return false
@@ -244,8 +286,10 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 
 		expr, is_config := find_attribute(declaration, "axiom_system_config")
 		if (is_config) {
-			fdasfdasfdasfas
-			parse; system; init; here
+			if !parse_system_configuration(schema, expr, declaration, path) {
+				return false
+			}
+
 			continue
 		}
 
@@ -1241,7 +1285,65 @@ begin_generated_file :: proc(builder: ^strings.Builder) {
 	fmt.sbprintln(builder)
 }
 
+system_component_name :: proc(schema: ^Meta_Schema, input: Meta_Property) -> string {
+	for component in schema.components {
+		if strings.has_prefix(input.type, "Component_") && input.type[len("Component_"):] == odin_type_name(component.name) {
+			return odin_value_name(component.name)
+		}
+	}
+	return ""
+}
+
+emit_system_wrapper :: proc(builder: ^strings.Builder, schema: ^Meta_Schema, system: Meta_System_Declaration) {
+	fmt.sbprintfln(builder, "{}_update_wrapper :: proc(engine: ^Axiom_Engine) {{", system.name)
+	if len(system.inputs) == 0 {
+		fmt.sbprintfln(builder, "\t{}()", system.name)
+	} else {
+		for input, index in system.inputs {
+			fmt.sbprintfln(builder, "\tmanager_{} := get_{}_component_manager(engine)", index, system_component_name(schema, input))
+		}
+		fmt.sbprintln(builder, "\tfor raw_entity_id in manager_0.reverse_packed_entities_lookup {")
+		fmt.sbprintln(builder, "\t\tentity_id := Entity_ID{id = raw_entity_id}")
+		for input in system.inputs {
+			fmt.sbprintfln(builder, "\t\tif !has_{}_component(engine, entity_id) {{", system_component_name(schema, input))
+			fmt.sbprintln(builder, "\t\t\tcontinue")
+			fmt.sbprintln(builder, "\t\t}")
+		}
+		fmt.sbprintln(builder, "\t\tentity_index := get_entity_index(entity_id)")
+		fmt.sbprintfln(builder, "\t\t{}(", system.name)
+		for input, index in system.inputs {
+			prefix := "&" if input.access == .RW else ""
+			fmt.sbprintfln(builder, "\t\t\t{}manager_{}.components[manager_{}.sparse_entities[entity_index]],", prefix, index, index)
+		}
+		fmt.sbprintln(builder, "\t\t)")
+		fmt.sbprintln(builder, "\t}")
+	}
+	fmt.sbprintln(builder, "}")
+	fmt.sbprintln(builder)
+}
+
 write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schema) -> bool {
+	for system in schema.Systems {
+		for input in system.inputs {
+			if system_component_name(schema, input) == "" {
+				fmt.eprintfln("AxiomMetaGen: unknown component type {} in system {}", input.type, system.name)
+				return false
+			}
+		}
+	}
+	for config in schema.System_configs {
+		found := false
+		for system in schema.Systems {
+			if system.name == config.target_system {
+				found = true
+				break
+			}
+		}
+		if !found {
+			fmt.eprintfln("AxiomMetaGen: unknown system {} for configuration {}", config.target_system, config.function_initializer_name)
+			return false
+		}
+	}
 	builder, err := strings.builder_make()
 	if err != nil {
 		return false
@@ -1251,6 +1353,9 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	begin_generated_file(&builder)
 	fmt.sbprintln(&builder, "import vmem \"core:mem/virtual\"")
 	fmt.sbprintln(&builder)
+	for system in schema.Systems {
+		emit_system_wrapper(&builder, schema, system)
+	}
 	fmt.sbprintln(
 		&builder,
 		"Destroy_Component_Proc :: #type proc(engine: ^Axiom_Engine, entity_id: Entity_ID)",
@@ -1262,11 +1367,12 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder, "}")
 	fmt.sbprintln(&builder)
 	fmt.sbprintln(&builder, "Axiom_Generated_Engine_Runtime :: struct {")
-	fmt.sbprintln(&builder, "\tcomponent_managers_arena: vmem.Arena,")
+	fmt.sbprintln(&builder, "\tecs_arena: vmem.Arena,")
 	fmt.sbprintln(
 		&builder,
 		"\tcomponent_managers:       [dynamic]Axiom_Generated_Component_Manager_Table,",
 	)
+	fmt.sbprintln(&builder, "\tsystems: [dynamic]Entity_System,")
 	fmt.sbprintln(&builder, "}")
 	fmt.sbprintln(&builder)
 	fmt.sbprintln(&builder, "get_axiom_generated_engine_runtime :: proc(")
@@ -1311,7 +1417,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	)
 	fmt.sbprintln(&builder, "\tengine.generated_engine_runtime = allocation.offset")
 	fmt.sbprintln(&builder, "\tcomponent_managers_arena_error := vmem.arena_init_growing(")
-	fmt.sbprintln(&builder, "\t\t&generated_runtime.component_managers_arena,")
+	fmt.sbprintln(&builder, "\t\t&generated_runtime.ecs_arena,")
 	fmt.sbprintln(&builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(
@@ -1324,7 +1430,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintln(&builder, "\t\t0,")
 	fmt.sbprintln(
 		&builder,
-		"\t\tvmem.arena_allocator(&generated_runtime.component_managers_arena),",
+		"\t\tvmem.arena_allocator(&generated_runtime.ecs_arena),",
 	)
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(&builder)
@@ -1349,6 +1455,42 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			value_name,
 			value_name,
 		)
+	}
+	fmt.sbprintln(&builder)
+	fmt.sbprintln(&builder, "\tgenerated_runtime.systems = make([dynamic]Entity_System, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))")
+	for system, index in schema.Systems {
+		fmt.sbprintfln(&builder, "\t_, system_{}_append_error := append(", index)
+		fmt.sbprintln(&builder, "\t\t&generated_runtime.systems,")
+		fmt.sbprintln(&builder, "\t\tEntity_System{")
+		fmt.sbprintfln(&builder, "\t\t\tname = \"{}\",", system.name)
+		fmt.sbprintfln(&builder, "\t\t\tupdate_system_proc = {}_update_wrapper,", system.name)
+		fmt.sbprintln(&builder, "\t\t},")
+		fmt.sbprintln(&builder, "\t)")
+		fmt.sbprintfln(&builder, "\tensure(system_{}_append_error == nil, \"initialize_axiom_components: failed to register {} system\")", index, system.name)
+		for input, input_index in system.inputs {
+			// Grouped parameters may refer to the same component; set its bit once.
+			duplicate := false
+			for previous in system.inputs[:input_index] {
+				if previous.type == input.type {
+					duplicate = true
+					break
+				}
+			}
+			if duplicate {
+				continue
+			}
+			upper := strings.to_upper(system_component_name(schema, input), context.temp_allocator)
+			fmt.sbprintfln(&builder, "\tensure(entity_add_component_mask(&generated_runtime.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")", index, upper, system.name)
+		}
+		fmt.sbprintfln(&builder, "\tgenerated_runtime.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))", index)
+	}
+	// All systems are registered before their configuration callbacks run.
+	for system, index in schema.Systems {
+		for config in schema.System_configs {
+			if config.target_system == system.name {
+				fmt.sbprintfln(&builder, "\t{}(&generated_runtime.systems[{}].configuration)", config.function_initializer_name, index)
+			}
+		}
 	}
 	fmt.sbprintln(&builder, "}")
 
