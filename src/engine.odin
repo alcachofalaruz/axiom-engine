@@ -74,9 +74,9 @@ tick_systems :: proc(engine: ^Axiom_Engine, phase: Axiom_System_Tick_Phase) {
 }
 
 tick_axiom :: proc(engine: ^Axiom_Engine) {
-	if engine == nil {
-		return
-	}
+	ensure(engine != nil)
+	tick_systems(engine, Axiom_System_Tick_Phase.Pre_Physics)
+	lane_sync()
 	step_simulation(engine, get_simulation_state(engine))
 	if lane_index() == 0 {
 		engine.tick_current += 1
