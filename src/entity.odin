@@ -279,7 +279,7 @@ entity_remove_component_mask :: proc(
 	return true
 }
 
-entity_add_component_mask :: proc(
+entity_add_component_mask_entity_id :: proc(
 	entity_system: ^Entity_Component_System,
 	id: Entity_ID,
 	component_index: u32,
@@ -300,7 +300,7 @@ entity_add_component_mask :: proc(
 	return true
 }
 
-entity_add_component_mask :: proc(mask: ^Components_Type_Mask, component_index: u32) -> bool {
+entity_add_component_mask_type_mask :: proc(mask: ^Components_Type_Mask, component_index: u32) -> bool {
 	word_index := component_index / 64
 	if word_index >= len(Components_Type_Mask{}.word) {
 		return false
@@ -311,4 +311,9 @@ entity_add_component_mask :: proc(mask: ^Components_Type_Mask, component_index: 
 	}
 	mask.word[word_index] |= component_bit
 	return true
+}
+
+entity_add_component_mask :: proc {
+	entity_add_component_mask_entity_id,
+	entity_add_component_mask_type_mask,
 }
