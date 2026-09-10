@@ -4,7 +4,7 @@
 
 https://github.com/EpicGamesExt/raddebugger
 
-Portions of this codebase (arena allocator, thread context) are adapted from the RAD
+Portions of this codebase (e.g, thread context) are adapted from the RAD
 Debugger source code, used under the following license:
 
 ```
