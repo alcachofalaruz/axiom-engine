@@ -158,11 +158,15 @@ parse_system_odin :: proc(
 		return false
 	}
 	system_index := len(schema.Systems)
-	_, alloc_err = append(&schema.Systems, Meta_System_Declaration{name = name.name})
+	_, alloc_err = append(&schema.Systems, Meta_System_Declaration{})
 	if alloc_err != nil {
 		return false
 	}
 	system := &schema.Systems[system_index]
+	system.name, alloc_err = strings.intern_get(&schema.names, name.name)
+	if alloc_err != nil {
+		return false
+	}
 	system.inputs.allocator = storage
 	fmt.println("system:", name.name)
 	for field in literal.type.params.list {
@@ -190,14 +194,20 @@ parse_system_odin :: proc(
 			if !ok {
 				return false
 			}
-			_, alloc_err = append(
-				&system.inputs,
-				Meta_Property{type = component.name, name = identifier.name, access = access},
-			)
+			input_index := len(system.inputs)
+			_, alloc_err = append(&system.inputs, Meta_Property{access = access})
 			if alloc_err != nil {
 				return false
 			}
-
+			input := &system.inputs[input_index]
+			input.type, alloc_err = strings.intern_get(&schema.names, component.name)
+			if alloc_err != nil {
+				return false
+			}
+			input.name, alloc_err = strings.intern_get(&schema.names, identifier.name)
+			if alloc_err != nil {
+				return false
+			}
 		}
 
 	}
@@ -231,18 +241,21 @@ parse_system_configuration :: proc(
 	}
 
 	system_config_index := len(schema.System_configs)
-
-	_, alloc_err = append(
-		&schema.System_configs,
-		Meta_System_Configs {
-			target_system = target_name.name,
-			function_initializer_name = name.name,
-		},
-	)
+	schema.System_configs.allocator = vmem.arena_allocator(&schema.storage)
+	_, alloc_err = append(&schema.System_configs, Meta_System_Configs{})
 	if alloc_err != nil {
 		return false
 	}
 	system := &schema.System_configs[system_config_index]
+
+	system.target_system, alloc_err = strings.intern_get(&schema.names, target_name.name)
+	if alloc_err != nil {
+		return false
+	}
+	system.function_initializer_name, alloc_err = strings.intern_get(&schema.names, name.name)
+	if alloc_err != nil {
+		return false
+	}
 	fmt.println("system config:", target_name.name)
 
 	return true
@@ -1230,7 +1243,10 @@ emit_component_runtime :: proc(
 		value_name,
 	)
 	fmt.sbprintln(builder, "\t\tfor index := old_length; index < new_length; index += 1 {")
-	fmt.sbprintln(builder, "\t\t\tcomponent_manager.sparse_entities[index] = Entity_ID{id = MAX_ENTITIES}")
+	fmt.sbprintln(
+		builder,
+		"\t\t\tcomponent_manager.sparse_entities[index] = Entity_ID{id = MAX_ENTITIES}",
+	)
 	fmt.sbprintln(builder, "\t\t}")
 	fmt.sbprintln(builder, "\t}")
 	fmt.sbprintln(builder)
@@ -1240,7 +1256,10 @@ emit_component_runtime :: proc(
 		builder,
 		"\tappend(&component_manager.reverse_packed_entities_lookup, entity_id)",
 	)
-	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities[entity_index] = Entity_ID{id = component_index}")
+	fmt.sbprintln(
+		builder,
+		"\tcomponent_manager.sparse_entities[entity_index] = Entity_ID{id = component_index}",
+	)
 	fmt.sbprintfln(
 		builder,
 		"\t{}_component := &component_manager.components[component_index]",
@@ -1316,8 +1335,16 @@ emit_system_wrapper :: proc(
 		// Component managers have different concrete types, but share an entity slice type.
 		fmt.sbprintln(builder, "\tentities := manager_0.reverse_packed_entities_lookup[:]")
 		for index := 1; index < len(system.inputs); index += 1 {
-			fmt.sbprintfln(builder, "\tif len(manager_{}.reverse_packed_entities_lookup) < len(entities) {{", index)
-			fmt.sbprintfln(builder, "\t\tentities = manager_{}.reverse_packed_entities_lookup[:]", index)
+			fmt.sbprintfln(
+				builder,
+				"\tif len(manager_{}.reverse_packed_entities_lookup) < len(entities) {{",
+				index,
+			)
+			fmt.sbprintfln(
+				builder,
+				"\t\tentities = manager_{}.reverse_packed_entities_lookup[:]",
+				index,
+			)
 			fmt.sbprintln(builder, "\t}")
 		}
 		fmt.sbprintln(builder, "\tfor entity_id in entities {")
