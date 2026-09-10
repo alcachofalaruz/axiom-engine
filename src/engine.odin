@@ -3,6 +3,7 @@ package axiom
 import "core:mem"
 import mem_virtual "core:mem/virtual"
 import "core:os"
+import "core:slice"
 import "core:sync"
 import "core:thread"
 import "core:time"
@@ -10,12 +11,10 @@ import "core:time"
 Axiom_Callback :: #type proc(_: ^Axiom_Engine)
 
 Axiom_Init_Parameters :: struct {
-	max_axiom_cores:    u32,
-	target_fps:         u32,
-	content_directory:  string,
-	config_directory:   string,
-	on_axiom_pre_tick:  Axiom_Callback,
-	on_axiom_post_tick: Axiom_Callback,
+	max_axiom_cores:   u32,
+	target_fps:        u32,
+	content_directory: string,
+	config_directory:  string,
 }
 
 Axiom_Thread_Parameters :: struct {
@@ -39,13 +38,39 @@ Axiom_Engine :: struct {
 	initialized:              bool,
 	running:                  u32,
 	arena:                    ^mem_virtual.Arena,
-	on_axiom_pre_tick:        Axiom_Callback,
-	on_axiom_post_tick:       Axiom_Callback,
 	engine_memory_table:      ^Memory_Region_Table,
 	simulation_state_region:  ^Memory_Region,
 	engine_memory_region:     ^Memory_Region,
 	entity_system_region:     ^Memory_Region,
 	generated_engine_runtime: Memory_Region_Offset,
+	systems:                  [dynamic]Entity_System,
+}
+
+Axiom_System_Tick_Phase :: enum {
+	None,
+	Pre_Physics,
+}
+
+tick_systems :: proc(engine: ^Axiom_Engine, phase: Axiom_System_Tick_Phase) {
+	// Note(Nacho): we either want to keep systems in their own array or keep track of
+	// where each start on the array, this will do for now
+
+	// Note(Nacho): future nacho, search for first index more efficiently
+	// and just fo if group != phase -> break
+	found := false
+	for system in engine.systems {
+		if system.configuration.tick_group == phase {
+			found = true
+			system.update_system_proc(engine)
+			continue
+		}
+
+		// systems are sorted, if we reached here it means we ran out
+		// of systems in this tick phase to tick
+		if found {
+			break
+		}
+	}
 }
 
 tick_axiom :: proc(engine: ^Axiom_Engine) {
@@ -106,14 +131,8 @@ axiom_thread_entry :: proc(data: rawptr) {
 
 		lane_sync_u64(&step_count, 0)
 		for step_index: u64 = 0; step_index < step_count; step_index += 1 {
-			if engine.on_axiom_pre_tick != nil {
-				engine.on_axiom_pre_tick(engine)
-			}
 			lane_sync()
 			tick_axiom(engine)
-			if engine.on_axiom_post_tick != nil {
-				engine.on_axiom_post_tick(engine)
-			}
 			lane_sync()
 		}
 		step_count = 0
@@ -137,8 +156,6 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 		return nil
 	}
 	engine.arena = arena
-	engine.on_axiom_pre_tick = parameters.on_axiom_pre_tick
-	engine.on_axiom_post_tick = parameters.on_axiom_post_tick
 	engine.target_fps = parameters.target_fps
 	engine.delta_time = 1.0 / f32(parameters.target_fps)
 	engine.counter_per_sim_step = time.Second / time.Duration(parameters.target_fps)
@@ -178,8 +195,20 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 	if state := get_simulation_state(engine); state != nil {
 		state.time_step = engine.delta_time
 	}
+	engine.systems.allocator = mem_virtual.arena_allocator(engine.arena)
 
 	initialize_axiom_components(engine)
+	// TODO(Nacho): palyer generated content also gets init here
+
+
+	// sort by tick group, then by name, dupe names are not allowed
+	slice.sort_by(engine.systems[:], proc(a, b: Entity_System) -> bool {
+		if a.configuration.tick_group != b.configuration.tick_group {
+			return a.configuration.tick_group < b.configuration.tick_group
+		}
+
+		return a.name < b.name
+	})
 
 	system_core_count := os.get_processor_core_count()
 	if system_core_count < 1 {

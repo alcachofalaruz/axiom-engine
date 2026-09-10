@@ -6,18 +6,13 @@ Entity_ID :: struct {
 	id: u32,
 }
 
-Entity_System_Tick_Group :: enum {
-	None,
-	Pre_Physics,
-}
-
 Components_Type_Mask :: struct {
 	word: [4]u64,
 }
 
 Entity_System_Configuration :: struct {
 	dependencies: [dynamic]string,
-	tick_group:   Entity_System_Tick_Group,
+	tick_group:   Axiom_System_Tick_Phase,
 }
 
 system_after :: proc(config: ^Entity_System_Configuration, system: string) {
@@ -300,7 +295,10 @@ entity_add_component_mask_entity_id :: proc(
 	return true
 }
 
-entity_add_component_mask_type_mask :: proc(mask: ^Components_Type_Mask, component_index: u32) -> bool {
+entity_add_component_mask_type_mask :: proc(
+	mask: ^Components_Type_Mask,
+	component_index: u32,
+) -> bool {
 	word_index := component_index / 64
 	if word_index >= len(Components_Type_Mask{}.word) {
 		return false
@@ -317,3 +315,4 @@ entity_add_component_mask :: proc {
 	entity_add_component_mask_entity_id,
 	entity_add_component_mask_type_mask,
 }
+
