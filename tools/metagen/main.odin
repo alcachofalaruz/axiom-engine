@@ -1434,7 +1434,6 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		&builder,
 		"\tcomponent_managers:       [dynamic]Axiom_Generated_Component_Manager_Table,",
 	)
-	fmt.sbprintln(&builder, "\tsystems: [dynamic]Entity_System,")
 	fmt.sbprintln(&builder, "}")
 	fmt.sbprintln(&builder)
 	fmt.sbprintln(&builder, "get_axiom_generated_engine_runtime :: proc(")
@@ -1516,13 +1515,9 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		)
 	}
 	fmt.sbprintln(&builder)
-	fmt.sbprintln(
-		&builder,
-		"\tgenerated_runtime.systems = make([dynamic]Entity_System, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))",
-	)
 	for system, index in schema.Systems {
 		fmt.sbprintfln(&builder, "\t_, system_{}_append_error := append(", index)
-		fmt.sbprintln(&builder, "\t\t&generated_runtime.systems,")
+		fmt.sbprintln(&builder, "\t\t&engine.systems,")
 		fmt.sbprintln(&builder, "\t\tEntity_System{")
 		fmt.sbprintfln(&builder, "\t\t\tname = \"{}\",", system.name)
 		fmt.sbprintfln(&builder, "\t\t\tupdate_system_proc = {}_update_wrapper,", system.name)
@@ -1549,7 +1544,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			upper := strings.to_upper(system_component_name(schema, input), context.temp_allocator)
 			fmt.sbprintfln(
 				&builder,
-				"\tensure(entity_add_component_mask(&generated_runtime.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
+				"\tensure(entity_add_component_mask(&engine.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
 				index,
 				upper,
 				system.name,
@@ -1557,7 +1552,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		}
 		fmt.sbprintfln(
 			&builder,
-			"\tgenerated_runtime.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, vmem.arena_allocator(&generated_runtime.ecs_arena))",
+			"\tengine.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, engine.systems.allocator)",
 			index,
 		)
 	}
@@ -1567,7 +1562,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			if config.target_system == system.name {
 				fmt.sbprintfln(
 					&builder,
-					"\t{}(&generated_runtime.systems[{}].configuration)",
+					"\t{}(&engine.systems[{}].configuration)",
 					config.function_initializer_name,
 					index,
 				)
