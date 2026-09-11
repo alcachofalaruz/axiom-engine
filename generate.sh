@@ -7,7 +7,7 @@ source "$project_root/tools/odin_env.sh"
 
 mkdir -p build
 "$odin_command" build ./tools/metagen -out:build/axiom-metagen
-build/axiom-metagen src src
+build/axiom-metagen src src engine
 if [[ -n "$odinfmt_command" ]]; then
 	for generated_file in \
 		src/generated_fixed_*.odin \

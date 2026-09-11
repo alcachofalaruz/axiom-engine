@@ -11,6 +11,11 @@ import "core:path/filepath"
 import "core:strconv"
 import "core:strings"
 
+Meta_Target :: enum {
+	Engine,
+	Game,
+}
+
 Meta_Fixed_Declaration :: struct {
 	name:          string,
 	storage:       string,
@@ -57,7 +62,7 @@ Meta_Schema :: struct {
 	components:     [dynamic]Meta_Component_Declaration,
 	Systems:        [dynamic]Meta_System_Declaration,
 	System_configs: [dynamic]Meta_System_Configs,
-
+	gen_target:     Meta_Target,
 	// Names and finalized field/property slices live until schema_destroy.
 	storage:        vmem.Arena,
 	names:          strings.Intern,
@@ -642,7 +647,7 @@ parse_schema_target :: proc(schema: ^Meta_Schema, path: string) -> bool {
 		} else if strings.has_suffix(path, ".odin") {
 			return parse_odin_file(schema, path)
 		}
-		return false
+		return true
 	}
 
 	walker := os.walker_create(path)
@@ -1821,7 +1826,7 @@ emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> boo
 
 
 generate :: proc(args: []string) -> bool {
-	if len(args) < 3 {
+	if len(args) < 4 {
 		fmt.eprintln(
 			"usage: axiom-metagen <source-directory> <schema-directory|schema.axmeta> [...]",
 		)
@@ -1834,6 +1839,14 @@ generate :: proc(args: []string) -> bool {
 		fmt.eprintfln("AxiomMetaGen: could not allocate schema storage: {}", err)
 		return false
 	}
+
+	target_arg := args[3]
+	if target_arg == "engine" {
+		schema.gen_target = Meta_Target.Engine
+	} else {
+		schema.gen_target = Meta_Target.Game
+	}
+
 	defer schema_destroy(&schema)
 	for path in args[2:] {
 		if !parse_schema_target(&schema, path) {
