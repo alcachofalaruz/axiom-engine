@@ -205,10 +205,11 @@ destroy_entity :: proc(
 	if !entity_is_valid(entity_system, entity) {
 		return
 	}
-	generated_runtime := get_axiom_generated_engine_runtime(engine)
-	for manager_region in generated_runtime.component_managers {
-		if (entity_has_component(entity_system, entity, manager_region.type)) {
-			manager_region.destroy_component(engine, entity)
+	for ecs in ([2]^Axiom_ECS_Api{&engine.engine, &engine.game}) {
+		for manager_region in ecs.component_managers {
+			if entity_has_component(entity_system, entity, manager_region.type) {
+				manager_region.destroy_component(engine, entity)
+			}
 		}
 	}
 	index := get_entity_index(entity)

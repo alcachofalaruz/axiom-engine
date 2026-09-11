@@ -127,7 +127,7 @@ compile_target() {
 compile_target metagen "metagen" "$metagen_inputs" "$metagen_output" ./tools/metagen
 
 generate_declarations() {
-	"$metagen_output" src src
+	"$metagen_output" src src engine
 	if [[ -n "$odinfmt_command" ]]; then
 		for generated_file in \
 			src/generated_fixed_*.odin \

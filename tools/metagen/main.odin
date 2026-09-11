@@ -932,7 +932,7 @@ emit_vector :: proc(builder: ^strings.Builder, declaration: Meta_Vector_Declarat
 emit_component :: proc(
 	builder: ^strings.Builder,
 	declaration: Meta_Component_Declaration,
-	mask_index: u32,
+	mask_index, manager_index: u32,
 ) {
 	fmt.sbprintfln(builder, "Component_{} :: struct {{", odin_type_name(declaration.name))
 	// The original generator used a stack while parsing component properties;
@@ -946,11 +946,13 @@ emit_component :: proc(
 	fmt.sbprintln(builder, "}")
 	upper := strings.to_upper(odin_value_name(declaration.name), context.temp_allocator)
 	fmt.sbprintfln(builder, "COMPONENT_TYPE_{}_MASK_INDEX :: u32({})", upper, mask_index)
+	fmt.sbprintfln(builder, "{}_MANAGER_INDEX :: u32({})", upper, manager_index)
 }
 
 emit_component_runtime :: proc(
 	builder: ^strings.Builder,
 	declaration: Meta_Component_Declaration,
+	target: Meta_Target,
 ) {
 	type_name := odin_type_name(declaration.name)
 	value_name := odin_value_name(declaration.name)
@@ -975,34 +977,28 @@ emit_component_runtime :: proc(
 		"\tensure(engine != nil, \"get_{}_component_manager: engine is nil\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\tgenerated_runtime := get_axiom_generated_engine_runtime(engine)")
-	fmt.sbprintln(builder, "\tfor manager_entry in generated_runtime.component_managers {")
-	fmt.sbprintfln(builder, "\t\tif manager_entry.type != COMPONENT_TYPE_{}_MASK_INDEX {{", upper)
-	fmt.sbprintln(builder, "\t\t\tcontinue")
-	fmt.sbprintln(builder, "\t\t}")
 	fmt.sbprintfln(
 		builder,
-		"\t\tensure(manager_entry.region != nil, \"get_{}_component_manager: component region is nil\")",
-		value_name,
+		"\tmanager_entry := engine.{}.component_managers[{}_MANAGER_INDEX]",
+		"engine" if target == .Engine else "game",
+		upper,
 	)
-	fmt.sbprintln(builder, "\t\tcomponent_manager := memory_region_offset_dereference(")
-	fmt.sbprintfln(builder, "\t\t\tEntity_Component_Manager_Entry(Component_{}),", type_name)
-	fmt.sbprintln(builder, "\t\t\tmanager_entry.region,")
-	fmt.sbprintln(builder, "\t\t\t{},")
-	fmt.sbprintln(builder, "\t\t)")
 	fmt.sbprintfln(
 		builder,
-		"\t\tensure(component_manager != nil, \"get_{}_component_manager: manager lookup failed\")",
+		"\tensure(manager_entry.region != nil, \"get_{}_component_manager: component region is nil\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\t\treturn component_manager")
-	fmt.sbprintln(builder, "\t}")
+	fmt.sbprintln(builder, "\tcomponent_manager := memory_region_offset_dereference(")
+	fmt.sbprintfln(builder, "\t\tEntity_Component_Manager_Entry(Component_{}),", type_name)
+	fmt.sbprintln(builder, "\t\tmanager_entry.region,")
+	fmt.sbprintln(builder, "\t\t{},")
+	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintfln(
 		builder,
-		"\tensure(false, \"get_{}_component_manager: component manager is not registered\")",
+		"\tensure(component_manager != nil, \"get_{}_component_manager: manager lookup failed\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\treturn nil")
+	fmt.sbprintln(builder, "\treturn component_manager")
 	fmt.sbprintln(builder, "}")
 	fmt.sbprintln(builder)
 
@@ -1423,106 +1419,47 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	for system in schema.Systems {
 		emit_system_wrapper(&builder, schema, system)
 	}
-	fmt.sbprintln(
-		&builder,
-		"Destroy_Component_Proc :: #type proc(engine: ^Axiom_Engine, entity_id: Entity_ID)",
-	)
-	fmt.sbprintln(&builder, "Axiom_Generated_Component_Manager_Table :: struct {")
-	fmt.sbprintln(&builder, "\tdestroy_component: Destroy_Component_Proc,")
-	fmt.sbprintln(&builder, "\tregion:            ^Memory_Region,")
-	fmt.sbprintln(&builder, "\ttype:              u32,")
-	fmt.sbprintln(&builder, "}")
-	fmt.sbprintln(&builder)
-	fmt.sbprintln(&builder, "Axiom_Generated_Engine_Runtime :: struct {")
-	fmt.sbprintln(&builder, "\tecs_arena: vmem.Arena,")
-	fmt.sbprintln(
-		&builder,
-		"\tcomponent_managers:       [dynamic]Axiom_Generated_Component_Manager_Table,",
-	)
-	fmt.sbprintln(&builder, "}")
-	fmt.sbprintln(&builder)
-	fmt.sbprintln(&builder, "get_axiom_generated_engine_runtime :: proc(")
-	fmt.sbprintln(&builder, "\tengine: ^Axiom_Engine,")
-	fmt.sbprintln(&builder, ") -> ^Axiom_Generated_Engine_Runtime {")
-	fmt.sbprintln(
-		&builder,
-		"\tensure(engine != nil, \"get_axiom_generated_engine_runtime: engine is nil\")",
-	)
-	fmt.sbprintln(
-		&builder,
-		"\tensure(engine.engine_memory_region != nil, \"get_axiom_generated_engine_runtime: engine memory region is nil\")",
-	)
-	fmt.sbprintln(&builder, "\tgenerated_runtime := memory_region_offset_dereference(")
-	fmt.sbprintln(&builder, "\t\tAxiom_Generated_Engine_Runtime,")
-	fmt.sbprintln(&builder, "\t\tengine.engine_memory_region,")
-	fmt.sbprintln(&builder, "\t\tengine.generated_engine_runtime,")
-	fmt.sbprintln(&builder, "\t)")
-	fmt.sbprintln(
-		&builder,
-		"\tensure(generated_runtime != nil, \"get_axiom_generated_engine_runtime: runtime lookup failed\")",
-	)
-	fmt.sbprintln(&builder, "\treturn generated_runtime")
-	fmt.sbprintln(&builder, "}")
-	fmt.sbprintln(&builder)
-	fmt.sbprintln(&builder, "initialize_axiom_components :: proc(engine: ^Axiom_Engine) {")
-	fmt.sbprintln(
-		&builder,
-		"\tensure(engine != nil, \"initialize_axiom_components: engine is nil\")",
-	)
-	fmt.sbprintln(
-		&builder,
-		"\tensure(engine.engine_memory_region != nil, \"initialize_axiom_components: engine memory region is nil\")",
-	)
-	fmt.sbprintln(&builder, "\tgenerated_runtime, allocation := memory_region_push_struct(")
-	fmt.sbprintln(&builder, "\t\tAxiom_Generated_Engine_Runtime,")
-	fmt.sbprintln(&builder, "\t\tengine.engine_memory_region,")
-	fmt.sbprintln(&builder, "\t)")
-	fmt.sbprintln(
-		&builder,
-		"\tensure(generated_runtime != nil && memory_region_allocation_is_valid(allocation), \"initialize_axiom_components: runtime allocation failed\")",
-	)
-	fmt.sbprintln(&builder, "\tengine.generated_engine_runtime = allocation.offset")
+	target_name := "engine" if schema.gen_target == .Engine else "game"
+	fmt.sbprintfln(&builder, "initialize_axiom_{}_components :: proc(engine: ^Axiom_Engine) {{", target_name)
+	fmt.sbprintln(&builder, "\tensure(engine != nil, \"initialize_axiom_components: engine is nil\")")
+	fmt.sbprintfln(&builder, "\tecs := &engine.{}", target_name)
 	fmt.sbprintln(&builder, "\tcomponent_managers_arena_error := vmem.arena_init_growing(")
-	fmt.sbprintln(&builder, "\t\t&generated_runtime.ecs_arena,")
+	fmt.sbprintln(&builder, "\t\t&ecs.ecs_arena,")
 	fmt.sbprintln(&builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(
 		&builder,
 		"\tensure(component_managers_arena_error == nil, \"initialize_axiom_components: component manager table arena initialization failed\")",
 	)
-	fmt.sbprintln(&builder, "\tgenerated_runtime.component_managers = make(")
-	fmt.sbprintln(&builder, "\t\t[dynamic]Axiom_Generated_Component_Manager_Table,")
-	fmt.sbprintln(&builder, "\t\t0,")
-	fmt.sbprintln(&builder, "\t\t0,")
-	fmt.sbprintln(&builder, "\t\tvmem.arena_allocator(&generated_runtime.ecs_arena),")
+	fmt.sbprintln(&builder, "\tecs.systems.allocator = vmem.arena_allocator(&ecs.ecs_arena)")
+	fmt.sbprintln(&builder, "\tecs.component_managers = make(")
+	fmt.sbprintln(&builder, "\t\t[dynamic]Axiom_Component_Manager_Table,")
+	fmt.sbprintfln(&builder, "\t\t{},", len(schema.components))
+	fmt.sbprintfln(&builder, "\t\t{},", len(schema.components))
+	fmt.sbprintln(&builder, "\t\tvmem.arena_allocator(&ecs.ecs_arena),")
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(&builder)
 	for index := len(schema.components) - 1; index >= 0; index -= 1 {
 		value_name := odin_value_name(schema.components[index].name)
 		upper := strings.to_upper(value_name, context.temp_allocator)
-		fmt.sbprintfln(&builder, "\t_, {}_append_error := append(", value_name)
-		fmt.sbprintln(&builder, "\t\t&generated_runtime.component_managers,")
-		fmt.sbprintln(&builder, "\t\tAxiom_Generated_Component_Manager_Table{")
-		fmt.sbprintfln(&builder, "\t\t\tdestroy_component = remove_{}_component,", value_name)
 		fmt.sbprintfln(
 			&builder,
-			"\t\t\tregion            = initialize_{}_component_manager(engine),",
-			value_name,
+			"\tecs.component_managers[{}_MANAGER_INDEX] = Axiom_Component_Manager_Table{{",
+			upper,
 		)
-		fmt.sbprintfln(&builder, "\t\t\ttype              = COMPONENT_TYPE_{}_MASK_INDEX,", upper)
-		fmt.sbprintln(&builder, "\t\t},")
-		fmt.sbprintln(&builder, "\t)")
+		fmt.sbprintfln(&builder, "\t\tdestroy_component = remove_{}_component,", value_name)
 		fmt.sbprintfln(
 			&builder,
-			"\tensure({}_append_error == nil, \"initialize_axiom_components: failed to register {} component manager\")",
-			value_name,
+			"\t\tregion            = initialize_{}_component_manager(engine),",
 			value_name,
 		)
+		fmt.sbprintfln(&builder, "\t\ttype              = COMPONENT_TYPE_{}_MASK_INDEX,", upper)
+		fmt.sbprintln(&builder, "\t}")
 	}
 	fmt.sbprintln(&builder)
 	for system, index in schema.Systems {
 		fmt.sbprintfln(&builder, "\t_, system_{}_append_error := append(", index)
-		fmt.sbprintln(&builder, "\t\t&engine.systems,")
+		fmt.sbprintln(&builder, "\t\t&ecs.systems,")
 		fmt.sbprintln(&builder, "\t\tEntity_System{")
 		fmt.sbprintfln(&builder, "\t\t\tname = \"{}\",", system.name)
 		fmt.sbprintfln(&builder, "\t\t\tupdate_system_proc = {}_update_wrapper,", system.name)
@@ -1549,7 +1486,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			upper := strings.to_upper(system_component_name(schema, input), context.temp_allocator)
 			fmt.sbprintfln(
 				&builder,
-				"\tensure(entity_add_component_mask(&engine.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
+				"\tensure(entity_add_component_mask(&ecs.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
 				index,
 				upper,
 				system.name,
@@ -1557,7 +1494,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		}
 		fmt.sbprintfln(
 			&builder,
-			"\tengine.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, engine.systems.allocator)",
+			"\tecs.systems[{}].configuration.dependencies = make([dynamic]string, 0, 0, ecs.systems.allocator)",
 			index,
 		)
 	}
@@ -1567,7 +1504,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			if config.target_system == system.name {
 				fmt.sbprintfln(
 					&builder,
-					"\t{}(&engine.systems[{}].configuration)",
+					"\t{}(&ecs.systems[{}].configuration)",
 					config.function_initializer_name,
 					index,
 				)
@@ -1642,7 +1579,8 @@ write_vector_file :: proc(
 write_component_file :: proc(
 	output_directory, file_name: string,
 	declaration: Meta_Component_Declaration,
-	mask_index: u32,
+	mask_index, manager_index: u32,
+	target: Meta_Target,
 ) -> bool {
 	builder, err := strings.builder_make()
 	if err != nil {
@@ -1653,9 +1591,9 @@ write_component_file :: proc(
 	begin_generated_file(&builder)
 	fmt.sbprintln(&builder, "import vmem \"core:mem/virtual\"")
 	fmt.sbprintln(&builder)
-	emit_component(&builder, declaration, mask_index)
+	emit_component(&builder, declaration, mask_index, manager_index)
 	fmt.sbprintln(&builder)
-	emit_component_runtime(&builder, declaration)
+	emit_component_runtime(&builder, declaration, target)
 	return write_generated_file(output_directory, file_name, strings.to_string(builder))
 }
 
@@ -1723,45 +1661,6 @@ register_generated_file :: proc(expected: ^[dynamic]string, file_name: string) -
 	return true
 }
 
-remove_legacy_generated_directory :: proc(source_directory: string) -> bool {
-	legacy_directory, path_err := filepath.join({source_directory, "generated"}, context.allocator)
-	if path_err != nil {
-		fmt.eprintfln("AxiomMetaGen: could not build legacy generated path: {}", path_err)
-		return false
-	}
-	defer delete(legacy_directory, context.allocator)
-
-	if !os.is_directory(legacy_directory) {
-		return true
-	}
-	if !remove_stale_generated_files(legacy_directory, nil) {
-		return false
-	}
-
-	files, read_err := os.read_all_directory_by_path(legacy_directory, context.allocator)
-	if read_err != nil {
-		fmt.eprintfln(
-			"AxiomMetaGen: could not inspect legacy generated directory {}: {}",
-			legacy_directory,
-			read_err,
-		)
-		return false
-	}
-	defer os.file_info_slice_delete(files, context.allocator)
-	if len(files) != 0 {
-		return true
-	}
-	if remove_err := os.remove(legacy_directory); remove_err != nil {
-		fmt.eprintfln(
-			"AxiomMetaGen: could not remove legacy generated directory {}: {}",
-			legacy_directory,
-			remove_err,
-		)
-		return false
-	}
-	return true
-}
-
 emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> bool {
 	// Builders and the expected-file list can grow on the caller's allocator.
 	// Case conversions only survive until the current output file is written.
@@ -1805,20 +1704,23 @@ emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> boo
 	}
 	for index := 0; index < len(schema.components); index += 1 {
 		defer vmem.arena_free_all(&scratch)
-		mask_index := u32(len(schema.components) - index)
+		// Manager slots follow the reverse declaration order used at initialization.
+		manager_index := u32(len(schema.components) - index - 1)
+		mask_index := manager_index + 1
 		declaration := schema.components[index]
 		file_name := generated_file_name("component", declaration.name)
 		if !register_generated_file(&expected, file_name) {
 			delete(file_name)
 			return false
 		}
-		if !write_component_file(source_directory, file_name, declaration, mask_index) {
+		if !write_component_file(
+			source_directory, file_name, declaration, mask_index, manager_index, schema.gen_target,
+		) {
 			return false
 		}
 	}
 	if !write_generated_state_file(source_directory, schema) ||
-	   !remove_stale_generated_files(source_directory, expected[:]) ||
-	   !remove_legacy_generated_directory(source_directory) {
+	   !remove_stale_generated_files(source_directory, expected[:]) {
 		return false
 	}
 	return true
@@ -1828,7 +1730,7 @@ emit_schema_files :: proc(schema: ^Meta_Schema, source_directory: string) -> boo
 generate :: proc(args: []string) -> bool {
 	if len(args) < 4 {
 		fmt.eprintln(
-			"usage: axiom-metagen <source-directory> <schema-directory|schema.axmeta> [...]",
+			"usage: axiom-metagen <source-directory> <schema-directory|schema.axmeta> <engine|game> [additional-schema ...]",
 		)
 		return false
 	}
@@ -1840,15 +1742,22 @@ generate :: proc(args: []string) -> bool {
 		return false
 	}
 
+	defer schema_destroy(&schema)
+
 	target_arg := args[3]
 	if target_arg == "engine" {
 		schema.gen_target = Meta_Target.Engine
-	} else {
+	} else if target_arg == "game" {
 		schema.gen_target = Meta_Target.Game
+	} else {
+		fmt.eprintln("AxiomMetaGen: target must be engine or game")
+		return false
 	}
 
-	defer schema_destroy(&schema)
-	for path in args[2:] {
+	if !parse_schema_target(&schema, args[2]) {
+		return false
+	}
+	for path in args[4:] {
 		if !parse_schema_target(&schema, path) {
 			return false
 		}

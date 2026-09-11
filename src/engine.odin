@@ -22,28 +22,42 @@ Axiom_Thread_Parameters :: struct {
 	lane:   Lane_Context,
 }
 
+Destroy_Component_Proc :: #type proc(engine: ^Axiom_Engine, entity_id: Entity_ID)
+Axiom_Component_Manager_Table :: struct {
+	destroy_component: Destroy_Component_Proc,
+	region:            ^Memory_Region,
+	type:              u32,
+}
+
+
+Axiom_ECS_Api :: struct {
+	ecs_arena:          mem_virtual.Arena,
+	systems:            [dynamic]Entity_System,
+	component_managers: [dynamic]Axiom_Component_Manager_Table,
+}
+
 Axiom_Engine :: struct {
-	game_thread_count:        u32,
-	target_fps:               u32,
-	last_tick_time:           f32,
-	tick_head:                u64,
-	tick_verified:            u64,
-	tick_current:             u64,
-	last_time:                time.Time,
-	lane_broadcast_memory:    u64,
-	game_barrier:             sync.Barrier,
-	game_threads:             []^thread.Thread,
-	counter_per_sim_step:     time.Duration,
-	delta_time:               f32,
-	initialized:              bool,
-	running:                  u32,
-	arena:                    ^mem_virtual.Arena,
-	engine_memory_table:      ^Memory_Region_Table,
-	simulation_state_region:  ^Memory_Region,
-	engine_memory_region:     ^Memory_Region,
-	entity_system_region:     ^Memory_Region,
-	generated_engine_runtime: Memory_Region_Offset,
-	systems:                  [dynamic]Entity_System,
+	game_thread_count:       u32,
+	target_fps:              u32,
+	last_tick_time:          f32,
+	tick_head:               u64,
+	tick_verified:           u64,
+	tick_current:            u64,
+	last_time:               time.Time,
+	lane_broadcast_memory:   u64,
+	game_barrier:            sync.Barrier,
+	game_threads:            []^thread.Thread,
+	counter_per_sim_step:    time.Duration,
+	delta_time:              f32,
+	initialized:             bool,
+	running:                 u32,
+	arena:                   ^mem_virtual.Arena,
+	engine_memory_table:     ^Memory_Region_Table,
+	simulation_state_region: ^Memory_Region,
+	entity_system_region:    ^Memory_Region,
+	// Note(Nacho): making this distinction for a potential hot reload
+	game:                    Axiom_ECS_Api,
+	engine:                  Axiom_ECS_Api,
 }
 
 Axiom_System_Tick_Phase :: enum {
@@ -57,18 +71,22 @@ tick_systems :: proc(engine: ^Axiom_Engine, phase: Axiom_System_Tick_Phase) {
 
 	// Note(Nacho): future nacho, search for first index more efficiently
 	// and just fo if group != phase -> break
-	found := false
-	for system in engine.systems {
-		if system.configuration.tick_group == phase {
-			found = true
-			system.update_system_proc(engine)
-			continue
-		}
 
-		// systems are sorted, if we reached here it means we ran out
-		// of systems in this tick phase to tick
-		if found {
-			break
+	// TODO(Nacho): resolve dependencies, for tick order(though should be done at init sort)
+	for ecs in ([2]^Axiom_ECS_Api{&engine.engine, &engine.game}) {
+		found := false
+		for system in ecs.systems {
+			if system.configuration.tick_group == phase {
+				found = true
+				system.update_system_proc(engine)
+				continue
+			}
+
+			// systems are sorted, if we reached here it means we ran out
+			// of systems in this tick phase to tick
+			if found {
+				break
+			}
 		}
 	}
 }
@@ -167,11 +185,6 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 	if err != nil || !memory_region_table_init(engine.engine_memory_table) {
 		return nil
 	}
-	engine.engine_memory_region = memory_region_push_subregion(
-		engine.engine_memory_table,
-		"EngineData",
-		32 * mem.Gigabyte,
-	)
 	engine.simulation_state_region = memory_region_push_subregion(
 		engine.engine_memory_table,
 		"SimulationData",
@@ -184,9 +197,7 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 		32 * mem.Gigabyte,
 	)
 
-	if engine.engine_memory_region == nil ||
-	   engine.simulation_state_region == nil ||
-	   engine.entity_system_region == nil {
+	if engine.simulation_state_region == nil || engine.entity_system_region == nil {
 		return nil
 	}
 
@@ -195,20 +206,21 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 	if state := get_simulation_state(engine); state != nil {
 		state.time_step = engine.delta_time
 	}
-	engine.systems.allocator = mem_virtual.arena_allocator(engine.arena)
 
-	initialize_axiom_components(engine)
+	initialize_axiom_engine_components(engine)
 	// TODO(Nacho): palyer generated content also gets init here
 
 
 	// sort by tick group, then by name, dupe names are not allowed
-	slice.sort_by(engine.systems[:], proc(a, b: Entity_System) -> bool {
-		if a.configuration.tick_group != b.configuration.tick_group {
-			return a.configuration.tick_group < b.configuration.tick_group
-		}
+	for ecs in ([2]^Axiom_ECS_Api{&engine.engine, &engine.game}) {
+		slice.sort_by(ecs.systems[:], proc(a, b: Entity_System) -> bool {
+			if a.configuration.tick_group != b.configuration.tick_group {
+				return a.configuration.tick_group < b.configuration.tick_group
+			}
 
-		return a.name < b.name
-	})
+			return a.name < b.name
+		})
+	}
 
 	system_core_count := os.get_processor_core_count()
 	if system_core_count < 1 {
