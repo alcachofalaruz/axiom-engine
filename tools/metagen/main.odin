@@ -309,7 +309,7 @@ parse_odin_file :: proc(schema: ^Meta_Schema, path: string) -> bool {
 	for statement in file.decls {
 		declaration, ok := statement.derived.(^ast.Value_Decl)
 		if !ok {
-			return false
+			continue
 		}
 
 		if has_attribute(declaration, "axiom_system") {
@@ -700,6 +700,10 @@ odin_type_name :: proc(name: string) -> string {
 	return value if err == nil else ""
 }
 
+axiom_package_prefix :: proc(target: Meta_Target) -> string {
+	return "" if target == .Engine else "axiom."
+}
+
 emit_fixed :: proc(builder: ^strings.Builder, declaration: Meta_Fixed_Declaration) -> bool {
 	type_name := odin_type_name(declaration.name)
 	proc_prefix := odin_value_name(type_name)
@@ -972,6 +976,7 @@ emit_component_runtime :: proc(
 	type_name := odin_type_name(declaration.name)
 	value_name := odin_value_name(declaration.name)
 	upper := strings.to_upper(value_name, context.temp_allocator)
+	axiom_prefix := axiom_package_prefix(target)
 
 	fmt.sbprintfln(
 		builder,
@@ -983,8 +988,10 @@ emit_component_runtime :: proc(
 
 	fmt.sbprintfln(
 		builder,
-		"get_{}_component_manager :: proc(engine: ^Axiom_Engine) -> ^Entity_Component_Manager_Entry(Component_{}) {{",
+		"get_{}_component_manager :: proc(engine: ^{}Axiom_Engine) -> ^{}Entity_Component_Manager_Entry(Component_{}) {{",
 		value_name,
+		axiom_prefix,
+		axiom_prefix,
 		type_name,
 	)
 	fmt.sbprintfln(
@@ -1003,8 +1010,17 @@ emit_component_runtime :: proc(
 		"\tensure(manager_entry.region != nil, \"get_{}_component_manager: component region is nil\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\tcomponent_manager := memory_region_offset_dereference(")
-	fmt.sbprintfln(builder, "\t\tEntity_Component_Manager_Entry(Component_{}),", type_name)
+	fmt.sbprintfln(
+		builder,
+		"\tcomponent_manager := {}memory_region_offset_dereference(",
+		axiom_prefix,
+	)
+	fmt.sbprintfln(
+		builder,
+		"\t\t{}Entity_Component_Manager_Entry(Component_{}),",
+		axiom_prefix,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\t\tmanager_entry.region,")
 	fmt.sbprintln(builder, "\t\t{},")
 	fmt.sbprintln(builder, "\t)")
@@ -1019,8 +1035,10 @@ emit_component_runtime :: proc(
 
 	fmt.sbprintfln(
 		builder,
-		"initialize_{}_component_manager :: proc(engine: ^Axiom_Engine) -> ^Memory_Region {{",
+		"initialize_{}_component_manager :: proc(engine: ^{}Axiom_Engine) -> ^{}Memory_Region {{",
 		value_name,
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintfln(
 		builder,
@@ -1034,12 +1052,13 @@ emit_component_runtime :: proc(
 	)
 	fmt.sbprintfln(
 		builder,
-		"\tif region := memory_region_find(engine.engine_memory_table, COMPONENT_REGION_NAME_{}); region != nil {{",
+		"\tif region := {}memory_region_find(engine.engine_memory_table, COMPONENT_REGION_NAME_{}); region != nil {{",
+		axiom_prefix,
 		upper,
 	)
 	fmt.sbprintln(builder, "\t\treturn region")
 	fmt.sbprintln(builder, "\t}")
-	fmt.sbprintln(builder, "\tmemory_region := memory_region_push_subregion(")
+	fmt.sbprintfln(builder, "\tmemory_region := {}memory_region_push_subregion(", axiom_prefix)
 	fmt.sbprintln(builder, "\t\tengine.engine_memory_table,")
 	fmt.sbprintfln(builder, "\t\tCOMPONENT_REGION_NAME_{},", upper)
 	fmt.sbprintln(builder, "\t\t0,")
@@ -1050,19 +1069,29 @@ emit_component_runtime :: proc(
 		value_name,
 	)
 	fmt.sbprintln(builder)
-	fmt.sbprintln(builder, "\tcomponent_manager, allocation := memory_region_push_struct(")
-	fmt.sbprintfln(builder, "\t\tEntity_Component_Manager_Entry(Component_{}),", type_name)
+	fmt.sbprintfln(
+		builder,
+		"\tcomponent_manager, allocation := {}memory_region_push_struct(",
+		axiom_prefix,
+	)
+	fmt.sbprintfln(
+		builder,
+		"\t\t{}Entity_Component_Manager_Entry(Component_{}),",
+		axiom_prefix,
+		type_name,
+	)
 	fmt.sbprintln(builder, "\t\tmemory_region,")
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintfln(
 		builder,
-		"\tensure(component_manager != nil && memory_region_allocation_is_valid(allocation), \"initialize_{}_component_manager: manager allocation failed\")",
+		"\tensure(component_manager != nil && {}memory_region_allocation_is_valid(allocation), \"initialize_{}_component_manager: manager allocation failed\")",
+		axiom_prefix,
 		value_name,
 	)
 	fmt.sbprintfln(builder, "\tcomponent_manager.type = COMPONENT_TYPE_{}_MASK_INDEX", upper)
 	fmt.sbprintln(builder, "\tcomponents_arena_error := vmem.arena_init_growing(")
 	fmt.sbprintln(builder, "\t\t&component_manager.components_arena,")
-	fmt.sbprintln(builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
+	fmt.sbprintfln(builder, "\t\t{}AXIOM_DEFAULT_ARENA_RESERVE,", axiom_prefix)
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintfln(
 		builder,
@@ -1071,7 +1100,7 @@ emit_component_runtime :: proc(
 	)
 	fmt.sbprintln(builder, "\tentities_arena_error := vmem.arena_init_growing(")
 	fmt.sbprintln(builder, "\t\t&component_manager.entities_arena,")
-	fmt.sbprintln(builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
+	fmt.sbprintfln(builder, "\t\t{}AXIOM_DEFAULT_ARENA_RESERVE,", axiom_prefix)
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintfln(
 		builder,
@@ -1083,7 +1112,7 @@ emit_component_runtime :: proc(
 		"\treverse_packed_entities_lookup_arena_error := vmem.arena_init_growing(",
 	)
 	fmt.sbprintln(builder, "\t\t&component_manager.reverse_packed_entities_lookup_arena,")
-	fmt.sbprintln(builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
+	fmt.sbprintfln(builder, "\t\t{}AXIOM_DEFAULT_ARENA_RESERVE,", axiom_prefix)
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintfln(
 		builder,
@@ -1098,13 +1127,13 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\t\tvmem.arena_allocator(&component_manager.components_arena),")
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintln(builder, "\tcomponent_manager.sparse_entities = make(")
-	fmt.sbprintln(builder, "\t\t[dynamic]Entity_ID,")
+	fmt.sbprintfln(builder, "\t\t[dynamic]{}Entity_ID,", axiom_prefix)
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\tvmem.arena_allocator(&component_manager.entities_arena),")
 	fmt.sbprintln(builder, "\t)")
 	fmt.sbprintln(builder, "\tcomponent_manager.reverse_packed_entities_lookup = make(")
-	fmt.sbprintln(builder, "\t\t[dynamic]Entity_ID,")
+	fmt.sbprintfln(builder, "\t\t[dynamic]{}Entity_ID,", axiom_prefix)
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(builder, "\t\t0,")
 	fmt.sbprintln(
@@ -1118,15 +1147,17 @@ emit_component_runtime :: proc(
 
 	fmt.sbprintfln(
 		builder,
-		"has_{}_component :: proc(engine: ^Axiom_Engine, entity_id: Entity_ID) -> bool {{",
+		"has_{}_component :: proc(engine: ^{}Axiom_Engine, entity_id: {}Entity_ID) -> bool {{",
 		value_name,
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintfln(
 		builder,
 		"\tensure(engine != nil, \"has_{}_component: engine is nil\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\tentity_system := get_entity_system(engine)")
+	fmt.sbprintfln(builder, "\tentity_system := {}get_entity_system(engine)", axiom_prefix)
 	fmt.sbprintfln(
 		builder,
 		"\tensure(entity_system != nil, \"has_{}_component: entity system is nil\")",
@@ -1134,7 +1165,8 @@ emit_component_runtime :: proc(
 	)
 	fmt.sbprintfln(
 		builder,
-		"\treturn entity_has_component(entity_system, entity_id, COMPONENT_TYPE_{}_MASK_INDEX)",
+		"\treturn {}entity_has_component(entity_system, entity_id, COMPONENT_TYPE_{}_MASK_INDEX)",
+		axiom_prefix,
 		upper,
 	)
 	fmt.sbprintln(builder, "}")
@@ -1142,8 +1174,10 @@ emit_component_runtime :: proc(
 
 	fmt.sbprintfln(
 		builder,
-		"remove_{}_component :: proc(engine: ^Axiom_Engine, entity_id: Entity_ID) {{",
+		"remove_{}_component :: proc(engine: ^{}Axiom_Engine, entity_id: {}Entity_ID) {{",
 		value_name,
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintfln(
 		builder,
@@ -1151,11 +1185,12 @@ emit_component_runtime :: proc(
 		value_name,
 		value_name,
 	)
-	fmt.sbprintln(builder, "\tentity_system := get_entity_system(engine)")
+	fmt.sbprintfln(builder, "\tentity_system := {}get_entity_system(engine)", axiom_prefix)
 	fmt.sbprintln(builder, "\tensure(")
 	fmt.sbprintfln(
 		builder,
-		"\t\tentity_remove_component_mask(entity_system, entity_id, COMPONENT_TYPE_{}_MASK_INDEX),",
+		"\t\t{}entity_remove_component_mask(entity_system, entity_id, COMPONENT_TYPE_{}_MASK_INDEX),",
+		axiom_prefix,
 		upper,
 	)
 	fmt.sbprintfln(
@@ -1170,7 +1205,11 @@ emit_component_runtime :: proc(
 		"\tensure(component_manager != nil, \"remove_{}_component: component manager is nil\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\tcomponent_entity_index := get_entity_index(entity_id)")
+	fmt.sbprintfln(
+		builder,
+		"\tcomponent_entity_index := {}get_entity_index(entity_id)",
+		axiom_prefix,
+	)
 	fmt.sbprintln(
 		builder,
 		"\tcomponent_index := component_manager.sparse_entities[component_entity_index].id",
@@ -1180,13 +1219,16 @@ emit_component_runtime :: proc(
 		builder,
 		"\tlast_component_entity_id := component_manager.reverse_packed_entities_lookup[last_component_index]",
 	)
-	fmt.sbprintln(
+	fmt.sbprintfln(
 		builder,
-		"\tlast_component_entity_index := get_entity_index(last_component_entity_id)",
+		"\tlast_component_entity_index := {}get_entity_index(last_component_entity_id)",
+		axiom_prefix,
 	)
-	fmt.sbprintln(
+	fmt.sbprintfln(
 		builder,
-		"\tcomponent_manager.sparse_entities[component_entity_index] = Entity_ID{id = MAX_ENTITIES}",
+		"\tcomponent_manager.sparse_entities[component_entity_index] = {}Entity_ID{{id = {}MAX_ENTITIES}}",
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintln(builder)
 	fmt.sbprintln(builder, "\tif component_index == last_component_index {")
@@ -1200,17 +1242,21 @@ emit_component_runtime :: proc(
 		builder,
 		"\tunordered_remove(&component_manager.reverse_packed_entities_lookup, component_index)",
 	)
-	fmt.sbprintln(
+	fmt.sbprintfln(
 		builder,
-		"\tcomponent_manager.sparse_entities[last_component_entity_index] = Entity_ID{id = component_index}",
+		"\tcomponent_manager.sparse_entities[last_component_entity_index] = {}Entity_ID{{id = component_index}}",
+		axiom_prefix,
 	)
 	fmt.sbprintln(builder, "}")
 	fmt.sbprintln(builder)
 
 	fmt.sbprintfln(
 		builder,
-		"add_{}_component_to_entity_system :: proc(engine: ^Axiom_Engine, entity_system: ^Entity_Component_System, entity_id: Entity_ID) -> bool {{",
+		"add_{}_component_to_entity_system :: proc(engine: ^{}Axiom_Engine, entity_system: ^{}Entity_Component_System, entity_id: {}Entity_ID) -> bool {{",
 		value_name,
+		axiom_prefix,
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintfln(
 		builder,
@@ -1222,7 +1268,7 @@ emit_component_runtime :: proc(
 		"\tensure(entity_system != nil, \"add_{}_component_to_entity_system: entity system is nil\")",
 		value_name,
 	)
-	fmt.sbprintfln(builder, "\tif !entity_add_component_mask(")
+	fmt.sbprintfln(builder, "\tif !{}entity_add_component_mask(", axiom_prefix)
 	fmt.sbprintln(builder, "\t\tentity_system,")
 	fmt.sbprintln(builder, "\t\tentity_id,")
 	fmt.sbprintfln(builder, "\t\tCOMPONENT_TYPE_{}_MASK_INDEX,", upper)
@@ -1230,7 +1276,7 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "\t\treturn false")
 	fmt.sbprintln(builder, "\t}")
 	fmt.sbprintfln(builder, "\tcomponent_manager := get_{}_component_manager(engine)", value_name)
-	fmt.sbprintln(builder, "\tentity_index := int(get_entity_index(entity_id))")
+	fmt.sbprintfln(builder, "\tentity_index := int({}get_entity_index(entity_id))", axiom_prefix)
 	fmt.sbprintln(builder, "\tif entity_index >= len(component_manager.sparse_entities) {")
 	fmt.sbprintln(builder, "\t\told_length := len(component_manager.sparse_entities)")
 	fmt.sbprintln(builder, "\t\tnew_length := entity_index + 1")
@@ -1259,9 +1305,11 @@ emit_component_runtime :: proc(
 		value_name,
 	)
 	fmt.sbprintln(builder, "\t\tfor index := old_length; index < new_length; index += 1 {")
-	fmt.sbprintln(
+	fmt.sbprintfln(
 		builder,
-		"\t\t\tcomponent_manager.sparse_entities[index] = Entity_ID{id = MAX_ENTITIES}",
+		"\t\t\tcomponent_manager.sparse_entities[index] = {}Entity_ID{{id = {}MAX_ENTITIES}}",
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintln(builder, "\t\t}")
 	fmt.sbprintln(builder, "\t}")
@@ -1272,9 +1320,10 @@ emit_component_runtime :: proc(
 		builder,
 		"\tappend(&component_manager.reverse_packed_entities_lookup, entity_id)",
 	)
-	fmt.sbprintln(
+	fmt.sbprintfln(
 		builder,
-		"\tcomponent_manager.sparse_entities[entity_index] = Entity_ID{id = component_index}",
+		"\tcomponent_manager.sparse_entities[entity_index] = {}Entity_ID{{id = component_index}}",
+		axiom_prefix,
 	)
 	fmt.sbprintfln(
 		builder,
@@ -1288,15 +1337,17 @@ emit_component_runtime :: proc(
 	fmt.sbprintln(builder, "}")
 	fmt.sbprintfln(
 		builder,
-		"add_{}_component_to_engine :: proc(engine: ^Axiom_Engine, entity_id: Entity_ID) -> bool {{",
+		"add_{}_component_to_engine :: proc(engine: ^{}Axiom_Engine, entity_id: {}Entity_ID) -> bool {{",
 		value_name,
+		axiom_prefix,
+		axiom_prefix,
 	)
 	fmt.sbprintfln(
 		builder,
 		"\tensure(engine != nil, \"add_{}_component_to_engine: engine is nil\")",
 		value_name,
 	)
-	fmt.sbprintln(builder, "\tentity_system := get_entity_system(engine)")
+	fmt.sbprintfln(builder, "\tentity_system := {}get_entity_system(engine)", axiom_prefix)
 	fmt.sbprintfln(
 		builder,
 		"\tensure(entity_system != nil, \"add_{}_component_to_engine: entity system is nil\")",
@@ -1336,7 +1387,13 @@ emit_system_wrapper :: proc(
 	schema: ^Meta_Schema,
 	system: Meta_System_Declaration,
 ) {
-	fmt.sbprintfln(builder, "{}_update_wrapper :: proc(engine: ^Axiom_Engine) {{", system.name)
+	axiom_prefix := axiom_package_prefix(schema.gen_target)
+	fmt.sbprintfln(
+		builder,
+		"{}_update_wrapper :: proc(engine: ^{}Axiom_Engine) {{",
+		system.name,
+		axiom_prefix,
+	)
 	if len(system.inputs) == 0 {
 		fmt.sbprintfln(builder, "\t{}()", system.name)
 	} else {
@@ -1373,7 +1430,11 @@ emit_system_wrapper :: proc(
 			fmt.sbprintln(builder, "\t\t\tcontinue")
 			fmt.sbprintln(builder, "\t\t}")
 		}
-		fmt.sbprintln(builder, "\t\tentity_index := get_entity_index(entity_id)")
+		fmt.sbprintfln(
+			builder,
+			"\t\tentity_index := {}get_entity_index(entity_id)",
+			axiom_prefix,
+		)
 		fmt.sbprintfln(builder, "\t\t{}(", system.name)
 		for input, index in system.inputs {
 			prefix := "&" if input.access == .RW else ""
@@ -1430,15 +1491,21 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 
 	begin_generated_file(schema.package_name, &builder)
 	fmt.sbprintln(&builder, "import vmem \"core:mem/virtual\"")
+	if schema.gen_target == .Game {
+		fmt.sbprintln(&builder, "import axiom \"axiom:src\"")
+		fmt.sbprintln(&builder, "import \"base:runtime\"")
+	}
 	fmt.sbprintln(&builder)
 	for system in schema.Systems {
 		emit_system_wrapper(&builder, schema, system)
 	}
 	target_name := "engine" if schema.gen_target == .Engine else "game"
+	axiom_prefix := axiom_package_prefix(schema.gen_target)
 	fmt.sbprintfln(
 		&builder,
-		"initialize_axiom_{}_components :: proc(engine: ^Axiom_Engine) {{",
+		"initialize_axiom_{}_components :: proc(engine: ^{}Axiom_Engine) {{",
 		target_name,
+		axiom_prefix,
 	)
 	fmt.sbprintln(
 		&builder,
@@ -1447,7 +1514,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	fmt.sbprintfln(&builder, "\tecs := &engine.{}", target_name)
 	fmt.sbprintln(&builder, "\tcomponent_managers_arena_error := vmem.arena_init_growing(")
 	fmt.sbprintln(&builder, "\t\t&ecs.ecs_arena,")
-	fmt.sbprintln(&builder, "\t\tAXIOM_DEFAULT_ARENA_RESERVE,")
+	fmt.sbprintfln(&builder, "\t\t{}AXIOM_DEFAULT_ARENA_RESERVE,", axiom_prefix)
 	fmt.sbprintln(&builder, "\t)")
 	fmt.sbprintln(
 		&builder,
@@ -1455,7 +1522,11 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	)
 	fmt.sbprintln(&builder, "\tecs.systems.allocator = vmem.arena_allocator(&ecs.ecs_arena)")
 	fmt.sbprintln(&builder, "\tecs.component_managers = make(")
-	fmt.sbprintln(&builder, "\t\t[dynamic]Axiom_Component_Manager_Table,")
+	fmt.sbprintfln(
+		&builder,
+		"\t\t[dynamic]{}Axiom_Component_Manager_Table,",
+		axiom_prefix,
+	)
 	fmt.sbprintfln(&builder, "\t\t{},", len(schema.components))
 	fmt.sbprintfln(&builder, "\t\t{},", len(schema.components))
 	fmt.sbprintln(&builder, "\t\tvmem.arena_allocator(&ecs.ecs_arena),")
@@ -1466,8 +1537,9 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		upper := strings.to_upper(value_name, context.temp_allocator)
 		fmt.sbprintfln(
 			&builder,
-			"\tecs.component_managers[{}_MANAGER_INDEX] = Axiom_Component_Manager_Table{{",
+			"\tecs.component_managers[{}_MANAGER_INDEX] = {}Axiom_Component_Manager_Table{{",
 			upper,
+			axiom_prefix,
 		)
 		fmt.sbprintfln(&builder, "\t\tdestroy_component = remove_{}_component,", value_name)
 		fmt.sbprintfln(
@@ -1482,7 +1554,7 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 	for system, index in schema.Systems {
 		fmt.sbprintfln(&builder, "\t_, system_{}_append_error := append(", index)
 		fmt.sbprintln(&builder, "\t\t&ecs.systems,")
-		fmt.sbprintln(&builder, "\t\tEntity_System{")
+		fmt.sbprintfln(&builder, "\t\t{}Entity_System{{", axiom_prefix)
 		fmt.sbprintfln(&builder, "\t\t\tname = \"{}\",", system.name)
 		fmt.sbprintfln(&builder, "\t\t\tupdate_system_proc = {}_update_wrapper,", system.name)
 		fmt.sbprintln(&builder, "\t\t},")
@@ -1508,7 +1580,8 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 			upper := strings.to_upper(system_component_name(schema, input), context.temp_allocator)
 			fmt.sbprintfln(
 				&builder,
-				"\tensure(entity_add_component_mask(&ecs.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
+				"\tensure({}entity_add_component_mask(&ecs.systems[{}].target_components, COMPONENT_TYPE_{}_MASK_INDEX), \"initialize_axiom_components: failed to set {} system component mask\")",
+				axiom_prefix,
 				index,
 				upper,
 				system.name,
@@ -1534,6 +1607,20 @@ write_generated_state_file :: proc(source_directory: string, schema: ^Meta_Schem
 		}
 	}
 	fmt.sbprintln(&builder, "}")
+	if schema.gen_target == .Game {
+		fmt.sbprintln(&builder)
+		fmt.sbprintln(&builder, "@(init)")
+		fmt.sbprintln(
+			&builder,
+			"register_generated_axiom_game_components :: proc \"contextless\" () {",
+		)
+		fmt.sbprintln(&builder, "\tcontext = runtime.default_context()")
+		fmt.sbprintln(
+			&builder,
+			"\taxiom.set_game_content_initializer(initialize_axiom_game_components)",
+		)
+		fmt.sbprintln(&builder, "}")
+	}
 
 	return write_generated_file(
 		source_directory,
@@ -1615,6 +1702,9 @@ write_component_file :: proc(
 
 	begin_generated_file(package_name, &builder)
 	fmt.sbprintln(&builder, "import vmem \"core:mem/virtual\"")
+	if target == .Game {
+		fmt.sbprintln(&builder, "import axiom \"axiom:src\"")
+	}
 	fmt.sbprintln(&builder)
 	emit_component(&builder, declaration, mask_index, manager_index)
 	fmt.sbprintln(&builder)

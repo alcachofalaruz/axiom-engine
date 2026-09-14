@@ -157,6 +157,15 @@ axiom_thread_entry :: proc(data: rawptr) {
 	}
 }
 
+Axiom_Game_Init_Proc :: #type proc(_: ^Axiom_Engine)
+
+@(private)
+axiom_game_initializer: Axiom_Game_Init_Proc
+
+set_game_content_initializer :: proc(init: Axiom_Game_Init_Proc) {
+	axiom_game_initializer = init
+}
+
 init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 	if parameters.target_fps == 0 {
 		return nil
@@ -208,7 +217,10 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 	}
 
 	initialize_axiom_engine_components(engine)
-	// TODO(Nacho): palyer generated content also gets init here
+
+	if axiom_game_initializer != nil {
+		axiom_game_initializer(engine)
+	}
 
 
 	// sort by tick group, then by name, dupe names are not allowed
