@@ -11,8 +11,10 @@ Components_Type_Mask :: struct {
 }
 
 Entity_System_Configuration :: struct {
-	dependencies: [dynamic]string,
-	tick_group:   Axiom_System_Tick_Phase,
+	dependencies:      [dynamic]string,
+	// Note(Nacho): for now lets make it opt in to de mcore for systems
+	allow_concurrency: bool,
+	tick_group:        Axiom_System_Tick_Phase,
 }
 
 system_after :: proc(config: ^Entity_System_Configuration, system: string) {
@@ -316,4 +318,3 @@ entity_add_component_mask :: proc {
 	entity_add_component_mask_entity_id,
 	entity_add_component_mask_type_mask,
 }
-

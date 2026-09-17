@@ -78,7 +78,12 @@ tick_systems :: proc(engine: ^Axiom_Engine, phase: Axiom_System_Tick_Phase) {
 		for system in ecs.systems {
 			if system.configuration.tick_group == phase {
 				found = true
-				system.update_system_proc(engine)
+				mcore_allowed := system.configuration.allow_concurrency
+				if mcore_allowed || lane_index() == 0 {
+					system.update_system_proc(engine)
+				}
+
+				lane_sync()
 				continue
 			}
 
@@ -221,7 +226,6 @@ init_axiom :: proc(parameters: Axiom_Init_Parameters) -> ^Axiom_Engine {
 	if axiom_game_initializer != nil {
 		axiom_game_initializer(engine)
 	}
-
 
 	// sort by tick group, then by name, dupe names are not allowed
 	for ecs in ([2]^Axiom_ECS_Api{&engine.engine, &engine.game}) {
