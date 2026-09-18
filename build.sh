@@ -5,6 +5,9 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
 project_root="$PWD"
 source "$project_root/tools/odin_env.sh"
 
+# Make a fresh clone buildable without a separate bootstrap step.
+git submodule update --init --recursive
+
 configuration="${1:-debug}"
 target="${2:-libraries}"
 case "$target" in
